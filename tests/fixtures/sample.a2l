@@ -1,0 +1,62 @@
+ASAP2_VERSION 1 60
+/begin PROJECT Demo "Demo project"
+  /begin MODULE ECU "ECU"
+    /begin IF_DATA XCP
+      /begin PROTOCOL_LAYER
+        0x0101
+      /end PROTOCOL_LAYER
+      /begin XCP_ON_CAN
+        0x0100
+        CAN_ID_MASTER 0x667
+        CAN_ID_SLAVE 0x7E1
+        BAUDRATE 500000
+      /end XCP_ON_CAN
+    /end IF_DATA
+
+    /begin COMPU_METHOD CmIdentity "" IDENTICAL "%6.1" ""
+    /end COMPU_METHOD
+
+    /begin COMPU_METHOD CmTemp "Temperature" LINEAR "%6.2" "degC"
+      COEFFS_LINEAR 0.1 0.0
+    /end COMPU_METHOD
+
+    /begin COMPU_METHOD CmRpm "Engine speed" RAT_FUNC "%6.1" "rpm"
+      COEFFS 0 0.25 0 0 0 1
+    /end COMPU_METHOD
+
+    /begin MEASUREMENT EngineSpeed "Engine speed" UWORD CmRpm 0 0 0 8000
+      ECU_ADDRESS 0x20000000
+    /end MEASUREMENT
+
+    /begin MEASUREMENT CoolantTemp "Coolant temperature" SWORD CmTemp 0 0 -40 150
+      ECU_ADDRESS 0x20000004
+      ECU_ADDRESS_EXTENSION 0
+    /end MEASUREMENT
+
+    /begin MEASUREMENT FlagByte "Status flag" UBYTE CmIdentity 0 0 0 255
+      ECU_ADDRESS 0x20000008
+    /end MEASUREMENT
+
+    /begin CHARACTERISTIC CalGain "Calibration gain" VALUE CmIdentity 0 100
+      ECU_ADDRESS 0x20001000
+      UWORD
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CalTempOffset "Temp offset" VALUE CmTemp -40 150
+      ECU_ADDRESS 0x20001004
+      SWORD
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CalTable "Block" VAL_BLK CmIdentity 0 255
+      ECU_ADDRESS 0x20002000
+      Record_UBYTE
+      MATRIX_DIM 3 1
+    /end CHARACTERISTIC
+
+    /begin CHARACTERISTIC CalFlag "Flag" VALUE CmIdentity 0 1
+      ECU_ADDRESS 0x20002010
+      Record_BOOLEAN
+    /end CHARACTERISTIC
+  /end MODULE
+/end PROJECT
+

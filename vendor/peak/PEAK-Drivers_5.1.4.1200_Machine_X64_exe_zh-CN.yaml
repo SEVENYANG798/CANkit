@@ -1,0 +1,93 @@
+PackageIdentifier: PEAKSystem.PEAKDrivers
+PackageVersion: 5.1.4.1200
+PackageLocale: en-US
+Author: PEAK-System Technik GmbH
+Copyright: "Copyright \xA9 2026 PEAK-System Technik GmbH. All rights reserved."
+CopyrightUrl: https://www.peak-system.com/EULA.495.0.html
+ShortDescription: Device drivers, tools, and APIs for PEAK-System PC interfaces.
+License: Proprietary
+LicenseUrl: https://www.peak-system.com/EULA.495.0.html
+PackageName: PEAK-Drivers
+PackageUrl: https://www.peak-system.com/Drivers.523.0.html
+PrivacyUrl: https://www.peak-system.com/Privacy-Policy.483.0.html
+Publisher: PEAK-System Technik GmbH
+PublisherSupportUrl: https://www.peak-system.com/Support.55.0.html
+PublisherUrl: https://www.peak-system.com/
+Localization:
+- PackageLocale: zh-CN
+  ShortDescription: "PEAK-System PC \u63A5\u53E3\u7684\u8BBE\u5907\u9A71\u52A8\u7A0B\u5E8F\u3001\u5DE5\u5177\u548C
+    API\u3002"
+  License: "\u4E13\u6709\u8F6F\u4EF6"
+  PackageUrl: https://peak-system.com.cn/driver/
+  PublisherSupportUrl: https://peak-system.com.cn/contactus/
+  PublisherUrl: https://peak-system.com.cn/
+Installers:
+- Architecture: x64
+  InstallerType: zip
+  NestedInstallerType: exe
+  InstallerSha256: b86b27a7d14438ebeb6960031f958e09004774627810d1ce7bfe23ce28e4a10d
+  InstallerUrl: https://www.peak-system.com/fileadmin/media/files/PEAK-System_Driver-Setup.zip
+  Scope: machine
+  ReleaseDate: 2026-10-19
+  InstallerAbortsTerminal: false
+  InstallLocationRequired: false
+  RequireExplicitUpgrade: false
+  DisplayInstallWarnings: false
+  DownloadCommandProhibited: false
+  ArchiveBinariesDependOnPath: false
+  ProductCode: PEAK-Drivers 5.1.4 5.1.4.1200
+  UpgradeBehavior: install
+  ExpectedReturnCodes:
+  - InstallerReturnCode: 1
+    ReturnResponse: invalidParameter
+  - InstallerReturnCode: 87
+    ReturnResponse: invalidParameter
+  - InstallerReturnCode: 1601
+    ReturnResponse: contactSupport
+  - InstallerReturnCode: 1602
+    ReturnResponse: cancelledByUser
+  - InstallerReturnCode: 1618
+    ReturnResponse: installInProgress
+  - InstallerReturnCode: 1623
+    ReturnResponse: systemNotSupported
+  - InstallerReturnCode: 1625
+    ReturnResponse: blockedByPolicy
+  - InstallerReturnCode: 1628
+    ReturnResponse: invalidParameter
+  - InstallerReturnCode: 1633
+    ReturnResponse: systemNotSupported
+  - InstallerReturnCode: 1638
+    ReturnResponse: alreadyInstalled
+  - InstallerReturnCode: 1639
+    ReturnResponse: invalidParameter
+  - InstallerReturnCode: 1640
+    ReturnResponse: blockedByPolicy
+  - InstallerReturnCode: 1641
+    ReturnResponse: rebootInitiated
+  - InstallerReturnCode: 1643
+    ReturnResponse: blockedByPolicy
+  - InstallerReturnCode: 1644
+    ReturnResponse: blockedByPolicy
+  - InstallerReturnCode: 1649
+    ReturnResponse: blockedByPolicy
+  - InstallerReturnCode: 1650
+    ReturnResponse: invalidParameter
+  - InstallerReturnCode: 1654
+    ReturnResponse: systemNotSupported
+  - InstallerReturnCode: 3010
+    ReturnResponse: rebootRequiredToFinish
+  - InstallerReturnCode: 4294967295
+    ReturnResponse: cancelledByUser
+  InstallerSwitches:
+    Silent: /exenoui /quiet /norestart
+    SilentWithProgress: /exenoui /passive /norestart
+    Log: /log "<LOGPATH>"
+    InstallLocation: APPDIR="<INSTALLPATH>"
+  InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+  NestedInstallerFiles:
+  - RelativeFilePath: PeakOemDrv.exe
+ManifestVersion: 1.12.0
+ManifestType: merged

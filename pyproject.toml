@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xcp-pcan"
+version = "0.1.0"
+description = "XCP on PCAN online variable reader (A2L/ELF, poll readout)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6-Essentials>=6.6",
+    "python-can>=4.3",
+    "pyelftools>=0.31",
+    "cantools>=39.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+xcp-pcan = "xcp_pcan.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",   # line length — many protocol / UI dumps exceed 100
+    "B904",   # raise-from in UI exception paths is noisy
+    "B008",   # Qt callables as defaults are intentional
+    "UP042",  # str Enum style kept for JSON / settings compatibility
+    "SIM105", # prefer explicit except for hardware / driver quirks
+    "SIM102", # nested ifs often clearer for protocol parsing
+    "SIM108", # ternary not always clearer
+    "SIM117", # nested with is fine for short scopes
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]

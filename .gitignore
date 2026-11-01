@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pyinstaller/
+output/
+*.spec
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+.idea/
+.vscode/
+.tools/
+*.bak
+tools_split_mw.py
+# Local PEAK driver installers (hundreds of MB) — not source
+vendor/peak/**/*.zip
+vendor/peak/**/*.exe
+vendor/peak/**/*.tmp
+vendor/peak/setup/

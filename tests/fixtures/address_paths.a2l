@@ -1,0 +1,50 @@
+ASAP2_VERSION 1 60
+/begin PROJECT AddrDemo "Address path demo"
+  /begin MODULE ECU "ECU"
+    /begin IF_DATA XCP
+      /begin XCP_ON_CAN
+        CAN_ID_MASTER 0x667
+        CAN_ID_SLAVE 0x7E1
+        BAUDRATE 500000
+      /end XCP_ON_CAN
+      LINK_MAP "Linker_Rpm" 0x40001000 0x0 0 0 0 0 0 0
+      LINK_MAP "OnlyLinkMap" 0x40002000 0x0 0 0 0 0 0 0
+    /end IF_DATA
+
+    /begin MEMORY_SEGMENT SegRam "" DATA FLASH INTERN 0x30000000 0x10000
+    /end MEMORY_SEGMENT
+
+    /begin COMPU_METHOD CmId "" IDENTICAL "%6.1" ""
+    /end COMPU_METHOD
+
+    /begin MEASUREMENT DirectEcu "has ECU_ADDRESS" UWORD CmId 0 0 0 100
+      ECU_ADDRESS 0x20000010
+      ECU_ADDRESS_EXTENSION 1
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ViaSymbolLink "via SYMBOL_LINK + LINK_MAP" UWORD CmId 0 0 0 100
+      SYMBOL_LINK "Linker_Rpm" 0
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ViaSymbolLinkOff "SYMBOL_LINK with offset" UWORD CmId 0 0 0 100
+      SYMBOL_LINK "Linker_Rpm" 4
+    /end MEASUREMENT
+
+    /begin MEASUREMENT OnlyLinkMap "matched by name in LINK_MAP" UBYTE CmId 0 0 0 255
+    /end MEASUREMENT
+
+    /begin MEASUREMENT ViaMemSeg "via memory segment" UWORD CmId 0 0 0 100
+      REF_MEMORY_SEGMENT SegRam
+      OFFSET 0x100
+    /end MEASUREMENT
+
+    /begin MEASUREMENT NeedsElf "only SYMBOL_LINK, no LINK_MAP" UWORD CmId 0 0 0 100
+      SYMBOL_LINK "ElfOnlySymbol" 0
+    /end MEASUREMENT
+
+    /begin CHARACTERISTIC CalViaAddr "char with address keyword" VALUE CmId 0 100
+      ADDRESS 0x2000ABCD
+      UWORD
+    /end CHARACTERISTIC
+  /end MODULE
+/end PROJECT

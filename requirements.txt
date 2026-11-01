@@ -1,0 +1,3 @@
+# Runtime deps — prefer: pip install -e ".[dev]"
+# Kept for mirror / offline installs that pin from a flat file.
+-e .
