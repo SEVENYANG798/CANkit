@@ -154,6 +154,7 @@ Produces `output\XcpVariableReader.exe` (PyInstaller onefile, no console). Inter
 
 ```powershell
 pytest
+ruff check src tests
 ```
 
 ## Project layout
