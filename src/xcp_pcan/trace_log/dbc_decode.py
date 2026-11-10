@@ -35,6 +35,27 @@ class DecodedMessage:
     error: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class SignalInfo:
+    """One DBC signal entry for pickers."""
+
+    message: str
+    frame_id: int
+    signal: str
+    unit: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class SignalSample:
+    """One decoded sample along a Trace for signal-plot / table."""
+
+    timestamp: float
+    frame_index: int
+    value: Any
+    numeric: float | None
+    text: str
+
+
 class DbcDatabase:
     """Thin wrapper so the UI does not import cantools directly everywhere."""
 
@@ -129,3 +150,91 @@ class DbcDatabase:
         for sig in decoded.signals:
             lines.append(f"  {sig.name:<{width}}  {sig.format_value()}")
         return "\n".join(lines)
+
+    def list_messages(self) -> list[tuple[str, int]]:
+        """``(message_name, frame_id)`` sorted by CAN-ID ascending."""
+        out: list[tuple[str, int]] = []
+        for message in self._db.messages:
+            fid = int(message.frame_id) & _ID_MASK
+            out.append((message.name, fid))
+        out.sort(key=lambda item: (item[1], item[0].lower()))
+        return out
+
+    def list_signals(self) -> list[SignalInfo]:
+        """Flat Message/Signal list for UI pickers (CAN-ID, then signal name)."""
+        out: list[SignalInfo] = []
+        for message in self._db.messages:
+            fid = int(message.frame_id) & _ID_MASK
+            for sig in message.signals:
+                unit = str(sig.unit) if sig.unit else ""
+                out.append(
+                    SignalInfo(
+                        message=message.name,
+                        frame_id=fid,
+                        signal=sig.name,
+                        unit=unit,
+                    )
+                )
+        out.sort(key=lambda s: (s.frame_id, s.message.lower(), s.signal.lower()))
+        return out
+
+    def extract_signal_series(
+        self,
+        frames: list[TraceFrame],
+        *,
+        frame_id: int,
+        signal: str,
+    ) -> tuple[str, str, list[SignalSample]]:
+        """Decode ``signal`` on matching Trace frames (offline plot / table).
+
+        Returns ``(message_name, unit, samples)``. Non-matching / error frames
+        and decode failures are skipped.
+        """
+        try:
+            message = self._message_for(frame_id)
+        except KeyError as exc:
+            raise KeyError(f"no DBC message for ID 0x{frame_id:X}") from exc
+        unit = ""
+        for sig in message.signals:
+            if sig.name == signal:
+                unit = str(sig.unit) if sig.unit else ""
+                break
+        else:
+            raise KeyError(f"signal {signal!r} not in {message.name}")
+
+        want = int(frame_id) & _ID_MASK
+        samples: list[SignalSample] = []
+        for fr in frames:
+            if fr.is_error:
+                continue
+            if (int(fr.arbitration_id) & _ID_MASK) != want:
+                continue
+            try:
+                # Physical values (no named choices) — suited to plot + period analysis.
+                decoded = message.decode(
+                    fr.data, decode_choices=False, scaling=True
+                )
+            except Exception:  # noqa: BLE001 — skip undecodable frames
+                continue
+            if signal not in decoded:
+                continue
+            raw_val = decoded[signal]
+            numeric: float | None
+            try:
+                numeric = float(raw_val)
+            except (TypeError, ValueError):
+                numeric = None
+            if isinstance(raw_val, float):
+                text = f"{raw_val:.6g}"
+            else:
+                text = str(raw_val)
+            samples.append(
+                SignalSample(
+                    timestamp=float(fr.timestamp),
+                    frame_index=int(fr.index),
+                    value=raw_val,
+                    numeric=numeric,
+                    text=text,
+                )
+            )
+        return message.name, unit, samples

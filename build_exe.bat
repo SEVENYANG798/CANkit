@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-echo Building XcpVariableReader.exe ...
+echo Building CANkit.exe ...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0build_exe.ps1"
 set ERR=%ERRORLEVEL%
 echo.

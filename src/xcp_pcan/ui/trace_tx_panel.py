@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Callable
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -16,11 +16,15 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+
+_VISIBLE_TX_ROWS = 2
+_TX_ROW_HEIGHT = 28
 
 from xcp_pcan.can.frame_util import fit_can_payload, next_can_fd_length
 from xcp_pcan.can.transport import CanBusTransport
@@ -98,7 +102,9 @@ class TraceTxPanel(QWidget):
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._table.verticalHeader().setVisible(True)
-        self._table.verticalHeader().setDefaultSectionSize(28)
+        self._table.verticalHeader().setDefaultSectionSize(_TX_ROW_HEIGHT)
+        self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(False)
@@ -111,6 +117,13 @@ class TraceTxPanel(QWidget):
         self._table.setColumnWidth(_COL_CYCLE, 52)
         self._table.setColumnWidth(_COL_SEND, 64)
         hdr.setSectionResizeMode(_COL_DATA, QHeaderView.ResizeMode.Stretch)
+        # Viewport shows 2 rows; extra TX rows scroll inside the table.
+        header_h = max(hdr.sizeHint().height(), 24)
+        table_h = header_h + _VISIBLE_TX_ROWS * _TX_ROW_HEIGHT + 4
+        self._table.setFixedHeight(table_h)
+        self._table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
 
         btn_add = QPushButton("Add")
         btn_add.clicked.connect(lambda: self.add_row())
@@ -125,16 +138,34 @@ class TraceTxPanel(QWidget):
         bar.addWidget(btn_del)
         bar.addWidget(btn_stop)
         bar.addStretch(1)
-        bar.addWidget(QLabel("Connect first · Data e.g. 11 22 33 44"))
+        self._lbl_bus = QLabel("")
+        self._lbl_bus.setStyleSheet("color: #a0a0a0;")
+        bar.addWidget(self._lbl_bus)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 0)
         root.addLayout(bar)
         root.addWidget(self._table)
 
+        self._bus_timer = QTimer(self)
+        self._bus_timer.setInterval(500)
+        self._bus_timer.timeout.connect(self.refresh_bus_hint)
+        self._bus_timer.start()
+        self.refresh_bus_hint()
+
         # Starter rows similar to common tooling.
         self.add_row(can_id="0x100", length=8, data="00 00 00 00 00 00 00 00", period=100)
         self.add_row(can_id="0x200", length=8, data="AA BB CC DD EE FF 00 11", period=50)
+
+    def refresh_bus_hint(self) -> None:
+        transport = self._transport_getter()
+        open_bus = transport is not None and transport.is_open
+        if open_bus:
+            self._lbl_bus.setText("Bus open · Data e.g. 11 22 33 44")
+            self._lbl_bus.setStyleSheet("color: #3d9a5f;")
+        else:
+            self._lbl_bus.setText("Connect first (main window) · Data e.g. 11 22 33 44")
+            self._lbl_bus.setStyleSheet("color: #b07020;")
 
     def add_row(
         self,
@@ -330,6 +361,17 @@ class TraceTxPanel(QWidget):
             return False
         try:
             arb, data, fd, ext = self._read_row(row)
+            if fd and not transport.fd:
+                if not quiet:
+                    QMessageBox.warning(
+                        self,
+                        "Transmit",
+                        "CAN bus is Classic — uncheck FD on the TX row, "
+                        "or Disconnect and Connect with CAN FD enabled.",
+                    )
+                else:
+                    self._uncheck_cycle(self._checkbox_at(row, _COL_CYCLE))
+                return False
             transport.send(
                 arb,
                 data,

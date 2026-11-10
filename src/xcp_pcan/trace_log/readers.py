@@ -80,6 +80,7 @@ def _from_can_msg(index: int, msg) -> TraceFrame | None:
         data=data,
         is_extended=bool(getattr(msg, "is_extended_id", False)),
         is_fd=bool(getattr(msg, "is_fd", False)),
+        bitrate_switch=bool(getattr(msg, "bitrate_switch", False)),
         is_rx=not bool(getattr(msg, "is_rx", True) is False),
         is_error=bool(getattr(msg, "is_error_frame", False)),
         channel=str(getattr(msg, "channel", "") or ""),
@@ -104,7 +105,11 @@ def _iter_asc(path: Path, *, progress: ProgressCb | None) -> Iterator[TraceFrame
 def _iter_blf(path: Path, *, progress: ProgressCb | None) -> Iterator[TraceFrame]:
     index = 0
     t0: float | None = None
-    with BLFReader(path) as reader:
+    try:
+        reader_cm = BLFReader(path)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Cannot open BLF {path.name}: {exc}") from exc
+    with reader_cm as reader:
         for msg in reader:
             frame = _from_can_msg(index, msg)
             if frame is None:
@@ -121,6 +126,11 @@ def _iter_blf(path: Path, *, progress: ProgressCb | None) -> Iterator[TraceFrame
             yield frame
             index += 1
             _report(progress, index, "BLF")
+    if index == 0:
+        raise RuntimeError(
+            f"BLF {path.name} opened but contains no CAN frames "
+            "(only non-CAN objects, or unsupported object types)."
+        )
 
 
 def _parse_arb_id(raw: str) -> int | None:

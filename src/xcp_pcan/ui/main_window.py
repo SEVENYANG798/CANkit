@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QObject, QSettings, Qt, Signal, Slot
+from PySide6.QtCore import QByteArray, QObject, QSettings, Qt, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPalette, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
     QTextEdit,
@@ -54,8 +55,8 @@ from xcp_pcan.xcp.master import XcpMaster, XcpSessionConfig
 from xcp_pcan.xcp.poller import Poller
 
 logger = logging.getLogger(__name__)
-SETTINGS_ORG = "XcpOnPcan"
-SETTINGS_APP = "VariableReader"
+SETTINGS_ORG = "CANkit"
+SETTINGS_APP = "CANkit"
 
 
 class _Bridge(QObject):
@@ -69,7 +70,9 @@ class _Bridge(QObject):
 class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("XCP Variable Reader — PCAN / Vector")
+        self.setWindowTitle("CANkit — PCAN / Vector")
+        # Free edge / corner resize; children use Expanding so panes fill the frame.
+        self.setMinimumSize(720, 480)
         self.resize(1280, 820)
         self._closing = False
 
@@ -104,8 +107,10 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._symbol_model = SymbolTableModel()
         self._poll_watch_model = WatchTableModel()
         self._daq_watch_model = WatchTableModel()
-        self._poll_traces = TraceBuffer()
-        self._daq_traces = TraceBuffer()
+        # Keep ~10 min / up to 300k pts per series so the left side does not
+        # vanish after a few seconds at typical DAQ rates.
+        self._poll_traces = TraceBuffer(maxlen=300_000, max_age_s=600.0)
+        self._daq_traces = TraceBuffer(maxlen=300_000, max_age_s=600.0)
         self._poll_chart = None
         self._daq_chart = None
         self._project_path = None
@@ -123,8 +128,10 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._connect_worker = None
         self._connect_progress = None
         self._connect_meta = None
+        self._connect_keep_front = None
         self._pending_after_xcp = None
         self._trace_viewer = None
+        self._diag_console = None
         self._help_dialog = None
 
         self._build_ui()
@@ -156,35 +163,52 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         btn_project.setToolTip("Open, save, or save the project as")
         toolbar.addWidget(btn_project)
         toolbar.addSeparator()
+
         self._act_load_symbols = QAction("Load A2L/ELF", self)
         self._act_load_symbols.triggered.connect(self._load_symbols)
-        toolbar.addAction(self._act_load_symbols)
         self._act_resolve_elf = QAction("Resolve addresses from ELF", self)
         self._act_resolve_elf.setToolTip(
             "Fill A2L symbols that still have address 0 using an ELF symbol table "
             "(in-memory only; does not rewrite the A2L file)."
         )
         self._act_resolve_elf.triggered.connect(self._resolve_from_elf)
-        toolbar.addAction(self._act_resolve_elf)
         self._act_update_a2l = QAction("Update A2L from ELF", self)
         self._act_update_a2l.setToolTip(
             "ASAP2-style: rewrite ECU_ADDRESS in an A2L file from ELF symbols "
             "(SYMBOL_LINK or object name). Runs in the background — UI stays usable."
         )
         self._act_update_a2l.triggered.connect(self._update_a2l_from_elf)
-        toolbar.addAction(self._act_update_a2l)
         self._act_elf2a2l = QAction("Create A2L from ELF", self)
         self._act_elf2a2l.setToolTip(
             "Create an A2L from ELF global variables (symbol table + optional DWARF types)."
         )
         self._act_elf2a2l.triggered.connect(self._elf_to_a2l)
-        toolbar.addAction(self._act_elf2a2l)
+
+        data_menu = QMenu(self)
+        data_menu.addAction(self._act_load_symbols)
+        data_menu.addAction(self._act_resolve_elf)
+        data_menu.addAction(self._act_update_a2l)
+        data_menu.addAction(self._act_elf2a2l)
+        btn_data = QToolButton()
+        btn_data.setText("Data Editor")
+        btn_data.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn_data.setMenu(data_menu)
+        btn_data.setToolTip("A2L / ELF load, resolve, update, and create")
+        toolbar.addWidget(btn_data)
+        toolbar.addSeparator()
+
         self._act_trace = QAction("Trace Viewer", self)
         self._act_trace.setToolTip(
             "Offline ASC/BLF/CSV and live CAN bus observation (DBC decode optional)."
         )
         self._act_trace.triggered.connect(self._open_trace_viewer)
         toolbar.addAction(self._act_trace)
+        self._act_diag = QAction("Diagnostic Console", self)
+        self._act_diag.setToolTip(
+            "UDS over ISO-TP (e.g. 0x22 Read DID / 0x2E Write DID) on the open CAN bus."
+        )
+        self._act_diag.triggered.connect(self._open_diag_console)
+        toolbar.addAction(self._act_diag)
         self._act_help = QAction("Help", self)
         self._act_help.setToolTip("Features and how to use this tool")
         self._act_help.triggered.connect(self._show_help)
@@ -209,8 +233,15 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         )
         self.connection.setTitle("")
         self.connection.setFlat(True)
+        # Scope to this widget only — a bare "QGroupBox {…}" stylesheet cascades
+        # to Bus/timing / Session / Security and collapses their title margins.
+        self.connection.setObjectName("connectionPanel")
         self.connection.setStyleSheet(
-            "QGroupBox { border: none; background: transparent; margin-top: 0px; }"
+            "#connectionPanel {"
+            " border: none;"
+            " background: transparent;"
+            " margin-top: 0px;"
+            "}"
         )
         self._fold_connection = CollapsibleSection(
             "Connection",
@@ -222,12 +253,17 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._fold_connection.toggled.connect(
             lambda open_: self._settings.setValue("ui_connection_open", open_)
         )
+        # Outside the mid|log splitter: expands by a bounded Advanced scroll area
+        # only, so Symbols/Watch are never covered.
         root.addWidget(self._fold_connection)
 
         self._splitter = QSplitter(Qt.Orientation.Vertical)
         self._mid = QSplitter(Qt.Orientation.Horizontal)
 
         self.symbols = SymbolPanel(self._symbol_model)
+        self.symbols.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self.symbols.add_selected.connect(self._add_selected_to_watch)
         self.symbols.add_all_filtered.connect(self._add_all_filtered_to_watch)
         self.symbols.load_lists.connect(self._load_symbol_lists)
@@ -235,6 +271,9 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self.symbols.clear_filter.connect(self._filter_symbols)
 
         self.watch = WatchTabs(self._poll_watch_model, self._daq_watch_model)
+        self.watch.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self.watch.tab_changed.connect(self._on_tab_changed)
         self.watch.poll_start.connect(self._start_poll)
         self.watch.poll_stop.connect(self._stop_poll)
@@ -261,21 +300,56 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
 
         self._mid.addWidget(self.symbols)
         self._mid.addWidget(self.watch)
-        self._mid.setStretchFactor(0, 1)
-        self._mid.setStretchFactor(1, 3)
-        self._mid.setSizes([320, 960])
-        self._splitter.addWidget(self._mid)
+        self._configure_splitter(
+            self._mid,
+            stretch=(1, 3),
+            default_sizes=[320, 960],
+            settings_key="ui_mid_splitter",
+        )
+
         self._fold_log = self._build_log_panel()
+        self._splitter.addWidget(self._mid)
         self._splitter.addWidget(self._fold_log)
-        self._splitter.setStretchFactor(0, 5)
-        self._splitter.setStretchFactor(1, 1)
-        self._splitter.setSizes([620, 160])
+        self._configure_splitter(
+            self._splitter,
+            stretch=(5, 1),
+            default_sizes=[620, 160],
+            # v2: 2-pane (mid|log); ignore older 3-pane Connection|mid|log state
+            settings_key="ui_main_splitter_v2",
+        )
         root.addWidget(self._splitter, stretch=1)
+
         if not self._fold_log.is_expanded():
             self._apply_log_height(False)
 
-        self.setStatusBar(QStatusBar())
+        status = QStatusBar()
+        status.setSizeGripEnabled(True)
+        self.setStatusBar(status)
         self.statusBar().showMessage("Ready")
+
+    def _configure_splitter(
+        self,
+        splitter: QSplitter,
+        *,
+        stretch: tuple[int, ...],
+        default_sizes: list[int],
+        settings_key: str,
+    ) -> None:
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
+        splitter.setOpaqueResize(True)
+        for i, factor in enumerate(stretch):
+            splitter.setStretchFactor(i, factor)
+        restored = self._settings.value(settings_key)
+        if isinstance(restored, QByteArray) and not restored.isEmpty():
+            splitter.restoreState(restored)
+        else:
+            splitter.setSizes(default_sizes)
+        splitter.splitterMoved.connect(
+            lambda _pos, _idx, s=splitter, key=settings_key: self._settings.setValue(
+                key, s.saveState()
+            )
+        )
 
     def _apply_log_height(self, expanded: bool) -> None:
         sizes = self._splitter.sizes()
@@ -286,7 +360,7 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         else:
             if sizes and sizes[-1] > 48:
                 self._settings.setValue("ui_log_height", sizes[-1])
-            log_h = 32
+            log_h = max(28, self._fold_log.sizeHint().height())
         self._splitter.setSizes([max(total - log_h, 200), log_h])
 
     def _build_log_panel(self) -> QWidget:
@@ -312,7 +386,10 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self.txt_log.setReadOnly(True)
         self.txt_log.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         self.txt_log.setStyleSheet("font-family: Consolas, 'Courier New', monospace;")
-        layout.addWidget(self.txt_log)
+        self.txt_log.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        layout.addWidget(self.txt_log, stretch=1)
 
         saved_filter = self._settings.value("log_filter", LogFilterMode.ALL.value)
         try:
@@ -456,7 +533,13 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
 
     def _close_tool_windows(self) -> None:
         """Tool windows are top-level (no transient parent); close them with the app."""
-        for attr in ("_trace_viewer", "_help_dialog", "_poll_chart", "_daq_chart"):
+        for attr in (
+            "_trace_viewer",
+            "_diag_console",
+            "_help_dialog",
+            "_poll_chart",
+            "_daq_chart",
+        ):
             win = getattr(self, attr, None)
             if win is None:
                 continue

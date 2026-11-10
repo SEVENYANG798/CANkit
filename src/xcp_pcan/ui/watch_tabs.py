@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QTreeView,
@@ -49,8 +50,9 @@ class WatchTabs(QTabWidget):
         self._daq_model = daq_model
         self._fold_btns: dict[QTreeView, QPushButton] = {}
         self._folded: dict[QTreeView, bool] = {}
-        self.addTab(self._build_poll_tab(), "Polling")
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.addTab(self._build_daq_tab(), "DAQ")
+        self.addTab(self._build_poll_tab(), "Polling")
         self.currentChanged.connect(self.tab_changed.emit)
 
     def _build_poll_tab(self) -> QWidget:
@@ -210,7 +212,7 @@ class WatchTabs(QTabWidget):
         self._apply_fold(view)
 
     def active_is_daq(self) -> bool:
-        return self.currentIndex() == 1
+        return self.tabText(self.currentIndex()) == "DAQ"
 
     def poll_selected_rows(self) -> list[int]:
         return [i.row() for i in self.tbl_poll.selectionModel().selectedRows()]

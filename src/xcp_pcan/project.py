@@ -21,14 +21,14 @@ def _optional_int(value: Any) -> int | None:
 class ConnectionSettings:
     hardware: str = "pcan"
     channel: str | int = "PCAN_USBBUS1"
-    vector_app_name: str = "XcpReader"
+    vector_app_name: str = "CANkit"
     vector_serial: int | None = None  # XL serial; None → app-channel / fallback
     bitrate: int = 500_000
-    fd: bool = False
+    fd: bool = True  # match common PCAN-View FD benches (nom 500k / data 2M)
     data_bitrate: int = 2_000_000
     f_clock_mhz: int = 80
-    master_can_id: str = "0x667"
-    slave_can_id: str = "0x7E1"
+    master_can_id: str = "0x6A8"  # VIU_FL
+    slave_can_id: str = "0x6A9"
     timeout_ms: int = 1000
 
 
@@ -109,7 +109,7 @@ class ProjectFile:
             connection=ConnectionSettings(
                 hardware=str(conn.get("hardware", "pcan")),
                 channel=conn.get("channel", "PCAN_USBBUS1"),
-                vector_app_name=str(conn.get("vector_app_name", "XcpReader")),
+                vector_app_name=str(conn.get("vector_app_name", "CANkit")),
                 vector_serial=_optional_int(conn.get("vector_serial")),
                 bitrate=int(conn.get("bitrate", 500_000)),
                 fd=bool(conn.get("fd", False)),

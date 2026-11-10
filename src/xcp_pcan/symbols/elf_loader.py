@@ -9,6 +9,7 @@ from pathlib import Path
 from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
+from xcp_pcan.symbols import elf_cache
 from xcp_pcan.symbols.types import (
     Conversion,
     DataType,
@@ -86,8 +87,20 @@ def load_elf(
     path: str | Path,
     *,
     on_progress: ProgressCallback | None = None,
+    use_cache: bool = True,
 ) -> SymbolStore:
     path = Path(path)
+    if use_cache:
+        cached = elf_cache.try_load(path)
+        if cached is not None:
+            _report(
+                on_progress,
+                f"Loaded {path.name} from cache ({len(cached.variables)} symbols)",
+                1.0,
+            )
+            logger.info("ELF cache hit: %s (%d symbols)", path, len(cached.variables))
+            return cached
+
     variables: list[Variable] = []
     _report(on_progress, f"Reading {path.name}…", 0.05)
     with path.open("rb") as f:
@@ -150,5 +163,10 @@ def load_elf(
         if prev is None or (prev.address == 0 and v.address != 0):
             by_name[v.name] = v
     out = sorted(by_name.values(), key=lambda v: v.name.lower())
-    _report(on_progress, f"Done — {len(out)} symbols", 1.0)
-    return SymbolStore(variables=out, source_path=str(path))
+    store = SymbolStore(variables=out, source_path=str(path))
+    if use_cache:
+        elf_cache.save(path, store)
+        _report(on_progress, f"Done — {len(out)} symbols (cached)", 1.0)
+    else:
+        _report(on_progress, f"Done — {len(out)} symbols", 1.0)
+    return store

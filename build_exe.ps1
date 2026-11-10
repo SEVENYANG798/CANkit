@@ -1,13 +1,13 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  One-click PyInstaller build → output\XcpVariableReader.exe, then delete build junk.
+  One-click PyInstaller build → output\CANkit.exe, then delete build junk.
 #>
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 
-$AppName = "XcpVariableReader"
+$AppName = "CANkit"
 $OutputDir = Join-Path $Root "output"
 $WorkRoot = Join-Path $Root ".pyinstaller"
 $DistDir = Join-Path $WorkRoot "dist"
@@ -75,6 +75,14 @@ $pyArgs = @(
     "--hidden-import", "can.interfaces.vector",
     "--hidden-import", "can.interfaces.vector.canlib",
     "--hidden-import", "can.interfaces.vector.xldriver",
+    # Trace Viewer offline readers (ASC/BLF/CSV)
+    "--hidden-import", "can.io",
+    "--hidden-import", "can.io.asc",
+    "--hidden-import", "can.io.blf",
+    "--hidden-import", "can.io.csv",
+    "--hidden-import", "can.io.generic",
+    "--hidden-import", "xcp_pcan.trace_log",
+    "--hidden-import", "xcp_pcan.trace_log.readers",
     "--hidden-import", "elftools",
     "--hidden-import", "elftools.elf.elffile",
     "--hidden-import", "elftools.elf.sections",

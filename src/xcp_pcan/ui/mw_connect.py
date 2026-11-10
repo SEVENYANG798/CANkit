@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import Slot
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QMessageBox, QWidget
 
 from xcp_pcan.can.transport import HardwareBackend
 from xcp_pcan.symbols.types import XcpTransportHints
 from xcp_pcan.ui.app_log import LogCategory
 from xcp_pcan.ui.connect_worker import ConnectWorker
 from xcp_pcan.ui.connection_panel import parse_can_id
+from xcp_pcan.ui.window_util import raise_window
 from xcp_pcan.ui.worker_util import (
     close_progress,
     make_progress_dialog,
@@ -73,16 +74,32 @@ class ConnectMixin:
         return self._connect_worker is not None and self._connect_worker.isRunning()
 
     @Slot()
-    def _connect(self) -> None:
+    def _connect_ui_parent(self) -> QWidget:
+        """Prefer the tool window that started Connect so progress stays there."""
+        front = getattr(self, "_connect_keep_front", None)
+        return front if front is not None else self
+
+    def _restore_connect_front(self) -> None:
+        front = getattr(self, "_connect_keep_front", None)
+        self._connect_keep_front = None
+        if front is not None:
+            raise_window(front)
+
+    def _connect(self, keep_front: QWidget | None = None) -> None:
+        """Open CAN bus. ``keep_front`` = Trace/Diag window when Connect started from there."""
+        self._connect_keep_front = keep_front
+        ui = self._connect_ui_parent()
         if self._connect_busy():
-            QMessageBox.information(self, "Busy", "Connect is already in progress.")
+            QMessageBox.information(ui, "Busy", "Connect is already in progress.")
+            self._restore_connect_front()
             return
         if self._transport.is_open:
             QMessageBox.information(
-                self,
+                ui,
                 "Already open",
                 "CAN bus is already open. Disconnect first, then Connect again.",
             )
+            self._restore_connect_front()
             return
         try:
             conn = self.connection.collect_connection()
@@ -93,10 +110,12 @@ class ConnectMixin:
             rx = parse_can_id(conn.slave_can_id)
             security = self.security.session_security_kwargs()
         except ValueError:
-            QMessageBox.warning(self, "Invalid input", "Check CAN IDs (hex like 0x667).")
+            QMessageBox.warning(ui, "Invalid input", "Check CAN IDs (hex like 0x667).")
+            self._restore_connect_front()
             return
         except SeedKeyError as exc:
-            QMessageBox.critical(self, "Seed&Key", str(exc))
+            QMessageBox.critical(ui, "Seed&Key", str(exc))
+            self._restore_connect_front()
             return
 
         self._master = XcpMaster(
@@ -152,7 +171,12 @@ class ConnectMixin:
         # Lock hardware controls while connecting (same as connected).
         self.connection.set_connected(True)
         progress = make_progress_dialog(
-            self, title="Connect", label="Opening CAN bus…", cancel_text="Cancel", maximum=0
+            ui,
+            title="Connect",
+            label="Opening CAN bus…",
+            cancel_text="Cancel",
+            maximum=0,
+            tool_window=keep_front is not None,
         )
         progress.canceled.connect(self._cancel_connect)
         self._connect_progress = progress
@@ -252,6 +276,13 @@ class ConnectMixin:
                 f"Bus open [{hw}/{mode}]  TX=0x{tx:X} RX=0x{rx:X}  ch={channel}  "
                 "(Monitor OK; XCP on Start poll/DAQ)"
             )
+            if self._trace_viewer is not None:
+                self._trace_viewer.set_transport(self._transport)
+                self._trace_viewer.notify_bus_open()
+            if self._diag_console is not None:
+                self._diag_console.set_transport(self._transport)
+                self._diag_console.notify_bus_open()
+            self._restore_connect_front()
             return
         max_cto = getattr(info, "max_cto", "?")
         max_dto = getattr(info, "max_dto", "?")
@@ -298,8 +329,14 @@ class ConnectMixin:
         self._safe_shutdown_bus()
         self._set_link_ui(bus_open=False, xcp=False)
         self._append_log(f"ERROR: {message}")
-        QMessageBox.critical(self, "Connect failed", message)
+        if self._trace_viewer is not None:
+            self._trace_viewer.clear_pending_live_after_connect()
+        if self._diag_console is not None:
+            self._diag_console.clear_pending_after_connect()
+        ui = self._connect_ui_parent()
+        QMessageBox.critical(ui, "Connect failed", message)
         self.statusBar().showMessage("Connect failed")
+        self._restore_connect_front()
 
     @Slot()
     def _on_connect_cancelled(self) -> None:
@@ -320,7 +357,12 @@ class ConnectMixin:
         self._safe_shutdown_bus()
         self._set_link_ui(bus_open=False, xcp=False)
         self._append_log("Connect cancelled")
+        if self._trace_viewer is not None:
+            self._trace_viewer.clear_pending_live_after_connect()
+        if self._diag_console is not None:
+            self._diag_console.clear_pending_after_connect()
         self.statusBar().showMessage("Connect cancelled")
+        self._restore_connect_front()
 
     @Slot()
     def _on_connect_thread_finished(self) -> None:
@@ -348,6 +390,8 @@ class ConnectMixin:
         self._safe_shutdown_bus()
         if self._trace_viewer is not None:
             self._trace_viewer.notify_bus_closed()
+        if self._diag_console is not None:
+            self._diag_console.notify_bus_closed()
         self._set_connected_ui(False)
         self.statusBar().showMessage("Disconnected")
 

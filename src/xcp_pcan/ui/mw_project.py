@@ -14,6 +14,7 @@ from xcp_pcan.project import (
     save_project,
 )
 from xcp_pcan.symbols.symbol_lists import load_symbol_list_dir
+from xcp_pcan.ui.diag_console_dialog import DiagConsoleDialog
 from xcp_pcan.ui.help_dialog import HelpDialog
 from xcp_pcan.ui.trace_viewer_dialog import TraceViewerDialog
 from xcp_pcan.ui.window_util import raise_window
@@ -113,7 +114,7 @@ class ProjectMixin:
     def _remember_project_path(self, path: Path) -> None:
         self._project_path = path
         self._settings.setValue("last_project", str(path))
-        self.setWindowTitle(f"XCP Variable Reader — {path.name}")
+        self.setWindowTitle(f"CANkit — {path.name}")
 
     def _restore_last_project(self) -> None:
         last = self._settings.value("last_project", "")
@@ -175,11 +176,32 @@ class ProjectMixin:
     def _open_trace_viewer(self) -> None:
         if self._trace_viewer is None:
             self._trace_viewer = TraceViewerDialog(
-                self._settings, self, transport=self._transport
+                self._settings,
+                self,
+                transport=self._transport,
+                on_connect=lambda: self._connect(keep_front=self._trace_viewer),
             )
         else:
             self._trace_viewer.set_transport(self._transport)
+            self._trace_viewer.set_on_connect(
+                lambda: self._connect(keep_front=self._trace_viewer)
+            )
         raise_window(self._trace_viewer)
+
+    def _open_diag_console(self) -> None:
+        if self._diag_console is None:
+            self._diag_console = DiagConsoleDialog(
+                self._settings,
+                self,
+                transport=self._transport,
+                on_connect=lambda: self._connect(keep_front=self._diag_console),
+            )
+        else:
+            self._diag_console.set_transport(self._transport)
+            self._diag_console.set_on_connect(
+                lambda: self._connect(keep_front=self._diag_console)
+            )
+        raise_window(self._diag_console)
 
     def _show_help(self) -> None:
         if self._help_dialog is None:

@@ -20,6 +20,7 @@ class TraceFrame:
     data: bytes
     is_extended: bool = False
     is_fd: bool = False
+    bitrate_switch: bool = False
     is_rx: bool = True
     is_error: bool = False
     channel: str = ""
@@ -35,3 +36,18 @@ class TraceFrame:
 
     def data_hex(self) -> str:
         return self.data.hex(" ").upper()
+
+    def type_label(self) -> str:
+        """PCAN-style Type column: CC / FD / FD BRS / ERR (+ XTD)."""
+        parts: list[str] = []
+        if self.is_error:
+            parts.append("ERR")
+        elif self.is_fd:
+            parts.append("FD")
+            if self.bitrate_switch:
+                parts.append("BRS")
+        else:
+            parts.append("CC")
+        if self.is_extended and not self.is_error:
+            parts.append("XTD")
+        return " ".join(parts)

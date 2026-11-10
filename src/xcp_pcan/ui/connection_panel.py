@@ -1,17 +1,19 @@
-"""Connection panel: essentials always visible; rest under 高级配置."""
+"""Connection panel: essentials always visible; rest under Advanced."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -24,9 +26,11 @@ from xcp_pcan.can.transport import (
     list_pcan_channels,
     list_vector_channels_for_serial,
 )
+from xcp_pcan.can_id_presets import XCP_PRESETS
 from xcp_pcan.project import ConnectionSettings, ResilienceSettings
 from xcp_pcan.symbols.types import XcpTransportHints
 from xcp_pcan.ui.collapsible import CollapsibleSection
+from xcp_pcan.ui.id_preset_bar import IdPresetBar
 
 
 def parse_can_id(text: str) -> int:
@@ -79,12 +83,48 @@ class ConnectionPanel(QGroupBox):
         self.cmb_channel = QComboBox()
         form.addRow("Channel", self.cmb_channel)
 
-        self.edt_tx = QLineEdit("0x667")
-        self.edt_rx = QLineEdit("0x7E1")
+        # Bus mode on the main panel — Classic vs FD is easy to miss under Advanced,
+        # and opening Classic on a CAN FD bus yields only stuff/bit error frames.
+        self.spn_bitrate = QSpinBox()
+        self.spn_bitrate.setRange(10_000, 1_000_000)
+        self.spn_bitrate.setSingleStep(10_000)
+        self.spn_bitrate.setValue(500_000)
+        self.spn_bitrate.setToolTip("Nominal (arbitration) bitrate — match PCAN-View / ECU.")
+        form.addRow("Nom bitrate", self.spn_bitrate)
+
+        mode_row = QHBoxLayout()
+        mode_row.setContentsMargins(0, 0, 0, 0)
+        self.chk_fd = QCheckBox("CAN FD")
+        self.chk_fd.setToolTip(
+            "Must match the bus. FD traffic on a Classic session shows as ERR/stuff frames."
+        )
+        self.chk_fd.toggled.connect(self._on_fd_toggled)
+        mode_row.addWidget(self.chk_fd)
+        self.spn_data_bitrate = QSpinBox()
+        self.spn_data_bitrate.setRange(100_000, 8_000_000)
+        self.spn_data_bitrate.setSingleStep(100_000)
+        self.spn_data_bitrate.setValue(2_000_000)
+        self.spn_data_bitrate.setToolTip("CAN FD data-phase bitrate (e.g. 2 Mbit/s).")
+        mode_row.addWidget(QLabel("Data"))
+        mode_row.addWidget(self.spn_data_bitrate, stretch=1)
+        form.addRow("Mode", mode_row)
+
+        default_xcp = XCP_PRESETS[0]
+        self.edt_tx = QLineEdit(default_xcp.tx)
+        self.edt_rx = QLineEdit(default_xcp.rx)
         self.edt_tx.setToolTip("XCP master → slave CAN ID")
         self.edt_rx.setToolTip("XCP slave → master CAN ID")
+        self._xcp_preset_bar = IdPresetBar(
+            kind="xcp",
+            builtin=XCP_PRESETS,
+            edt_tx=self.edt_tx,
+            edt_rx=self.edt_rx,
+            parent=self,
+        )
+        form.addRow("XCP target", self._xcp_preset_bar)
         form.addRow("Master TX ID", self.edt_tx)
         form.addRow("Slave RX ID", self.edt_rx)
+        self._xcp_preset_bar.sync_from_fields()
         basic.addLayout(form, stretch=1)
 
         btns = QVBoxLayout()
@@ -99,32 +139,16 @@ class ConnectionPanel(QGroupBox):
         root.addLayout(basic)
 
         # --- Collapsible advanced (bus timing + resilience + optional extras) --
-        self.advanced = CollapsibleSection("高级配置", expanded=False)
+        self.advanced = CollapsibleSection("Advanced", expanded=False)
         adv_row = QHBoxLayout()
 
         bus_box = QGroupBox("Bus / timing")
         bus_form = QFormLayout(bus_box)
-        self.edt_app_name = QLineEdit("XcpReader")
+        self.edt_app_name = QLineEdit("CANkit")
         self.edt_app_name.setToolTip(
             "Vector application name — assign channels in Vector Hardware Config."
         )
         bus_form.addRow("Vector app name", self.edt_app_name)
-
-        self.spn_bitrate = QSpinBox()
-        self.spn_bitrate.setRange(10_000, 1_000_000)
-        self.spn_bitrate.setSingleStep(10_000)
-        self.spn_bitrate.setValue(500_000)
-        bus_form.addRow("Nom bitrate", self.spn_bitrate)
-
-        self.chk_fd = QCheckBox("CAN FD")
-        self.chk_fd.toggled.connect(self._on_fd_toggled)
-        bus_form.addRow("Mode", self.chk_fd)
-
-        self.spn_data_bitrate = QSpinBox()
-        self.spn_data_bitrate.setRange(100_000, 8_000_000)
-        self.spn_data_bitrate.setSingleStep(100_000)
-        self.spn_data_bitrate.setValue(2_000_000)
-        bus_form.addRow("Data bitrate", self.spn_data_bitrate)
 
         self.spn_fclock = QSpinBox()
         self.spn_fclock.setRange(16, 80)
@@ -182,12 +206,35 @@ class ConnectionPanel(QGroupBox):
 
         bus_host = QWidget()
         bus_host.setLayout(adv_row)
-        self.advanced.add_widget(bus_host)
+
         # Placeholder host for Security panel (filled by MainWindow)
         self.advanced_extra = QVBoxLayout()
+        self.advanced_extra.setContentsMargins(0, 0, 0, 0)
         extra_wrap = QWidget()
         extra_wrap.setLayout(self.advanced_extra)
-        self.advanced.add_widget(extra_wrap)
+
+        # Bound Advanced body height and scroll — never push/cover Symbols/Watch.
+        adv_content = QWidget()
+        adv_content_layout = QVBoxLayout(adv_content)
+        adv_content_layout.setContentsMargins(0, 0, 0, 0)
+        adv_content_layout.setSpacing(6)
+        adv_content_layout.addWidget(bus_host)
+        adv_content_layout.addWidget(extra_wrap)
+
+        self._advanced_scroll = QScrollArea()
+        self._advanced_scroll.setWidgetResizable(True)
+        self._advanced_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._advanced_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._advanced_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._advanced_scroll.setWidget(adv_content)
+        # Fixed viewport height so expanding Advanced never covers Symbols/Watch.
+        # Content scrolls inside; header (Advanced ▶/▼) always stays visible.
+        self._advanced_scroll.setFixedHeight(240)
+        self.advanced.add_widget(self._advanced_scroll)
         root.addWidget(self.advanced)
 
         self._populate_channels()
@@ -295,14 +342,14 @@ class ConnectionPanel(QGroupBox):
         return ConnectionSettings(
             hardware=self.selected_backend().value,
             channel=channel if channel is not None else "PCAN_USBBUS1",
-            vector_app_name=self.edt_app_name.text().strip() or "XcpReader",
+            vector_app_name=self.edt_app_name.text().strip() or "CANkit",
             vector_serial=self.selected_vector_serial(),
             bitrate=self.spn_bitrate.value(),
             fd=self.chk_fd.isChecked(),
             data_bitrate=self.spn_data_bitrate.value(),
             f_clock_mhz=self.spn_fclock.value(),
-            master_can_id=self.edt_tx.text().strip() or "0x667",
-            slave_can_id=self.edt_rx.text().strip() or "0x7E1",
+            master_can_id=self.edt_tx.text().strip() or XCP_PRESETS[0].tx,
+            slave_can_id=self.edt_rx.text().strip() or XCP_PRESETS[0].rx,
             timeout_ms=self.spn_timeout.value(),
         )
 
@@ -330,6 +377,7 @@ class ConnectionPanel(QGroupBox):
         self.spn_fclock.setValue(conn.f_clock_mhz)
         self.edt_tx.setText(conn.master_can_id)
         self.edt_rx.setText(conn.slave_can_id)
+        self._xcp_preset_bar.sync_from_fields()
         self.spn_timeout.setValue(conn.timeout_ms)
         self._on_fd_toggled(conn.fd)
 

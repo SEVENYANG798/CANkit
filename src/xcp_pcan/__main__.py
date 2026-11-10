@@ -17,11 +17,17 @@ def main() -> int:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    from PySide6.QtCore import QTimer
+
+    from xcp_pcan.ui.update_dialog import schedule_update_check
+
     app = QApplication(sys.argv)
-    app.setApplicationName("XCP on PCAN")
-    app.setOrganizationName("XcpOnPcan")
+    app.setApplicationName("CANkit")
+    app.setOrganizationName("CANkit")
     window = MainWindow()
     window.show()
+    # Defer so first paint is not blocked; silent if offline / no newer release.
+    QTimer.singleShot(1500, lambda: schedule_update_check(window))
     return app.exec()
 
 

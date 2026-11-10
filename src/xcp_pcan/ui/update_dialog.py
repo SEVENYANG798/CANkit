@@ -1,0 +1,196 @@
+"""Prompt when a newer CANkit.exe is available on GitHub Releases."""
+
+from __future__ import annotations
+
+import logging
+import subprocess
+from pathlib import Path
+
+from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from xcp_pcan import __version__
+from xcp_pcan.update_check import (
+    UpdateInfo,
+    check_for_update,
+    current_exe_path,
+    download_update,
+    is_frozen,
+    write_apply_script,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class _CheckWorker(QObject):
+    finished = Signal(object)  # UpdateInfo | None
+    failed = Signal(str)
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.finished.emit(check_for_update())
+        except Exception as exc:  # noqa: BLE001 — surface to UI log
+            self.failed.emit(str(exc))
+
+
+class _DownloadWorker(QObject):
+    finished = Signal(object)  # Path
+    failed = Signal(str)
+
+    def __init__(self, info: UpdateInfo, dest: Path) -> None:
+        super().__init__()
+        self._info = info
+        self._dest = dest
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.finished.emit(download_update(self._info, self._dest))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+
+
+class UpdateAvailableDialog(QDialog):
+    def __init__(self, info: UpdateInfo, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("CANkit update")
+        self.resize(480, 320)
+        self._info = info
+        self._thread: QThread | None = None
+        self._worker: QObject | None = None
+
+        root = QVBoxLayout(self)
+        root.addWidget(
+            QLabel(f"New version {info.version} is available (you have {__version__}).")
+        )
+        notes = QTextEdit()
+        notes.setReadOnly(True)
+        notes.setPlainText(info.notes or "(no release notes)")
+        root.addWidget(notes, stretch=1)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 0)
+        self._progress.setVisible(False)
+        root.addWidget(self._progress)
+
+        self._status = QLabel("")
+        self._status.setStyleSheet("color:#616161;")
+        root.addWidget(self._status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self._btn_later = QPushButton("Later")
+        self._btn_later.clicked.connect(self.reject)
+        self._btn_update = QPushButton("Download & restart")
+        self._btn_update.setDefault(True)
+        self._btn_update.clicked.connect(self._start_download)
+        row.addWidget(self._btn_later)
+        row.addWidget(self._btn_update)
+        root.addLayout(row)
+
+        if not is_frozen():
+            self._btn_update.setEnabled(False)
+            self._status.setText("Update install only works from the packaged CANkit.exe.")
+
+    def _start_download(self) -> None:
+        exe = current_exe_path()
+        if exe is None:
+            QMessageBox.information(
+                self, "CANkit update", "Run the packaged CANkit.exe to apply updates."
+            )
+            return
+        dest = exe.with_suffix(exe.suffix + ".new")
+        self._btn_update.setEnabled(False)
+        self._btn_later.setEnabled(False)
+        self._progress.setVisible(True)
+        self._status.setText("Downloading…")
+
+        thread = QThread(self)
+        worker = _DownloadWorker(self._info, dest)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_downloaded)
+        worker.failed.connect(self._on_download_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._thread = thread
+        self._worker = worker
+        thread.start()
+
+    @Slot(object)
+    def _on_downloaded(self, path: object) -> None:
+        assert isinstance(path, Path)
+        exe = current_exe_path()
+        if exe is None:
+            self.reject()
+            return
+        script = write_apply_script(current_exe=exe, new_exe=path)
+        self._status.setText("Restarting to apply update…")
+        try:
+            subprocess.Popen(
+                ["cmd.exe", "/c", str(script)],
+                close_fds=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError as exc:
+            QMessageBox.warning(self, "CANkit update", f"Could not start updater:\n{exc}")
+            self._btn_update.setEnabled(True)
+            self._btn_later.setEnabled(True)
+            self._progress.setVisible(False)
+            return
+        # Quit the app so the script can replace the exe.
+        self.accept()
+        from PySide6.QtWidgets import QApplication
+
+        qapp = QApplication.instance()
+        if qapp is not None:
+            qapp.quit()
+
+    @Slot(str)
+    def _on_download_failed(self, message: str) -> None:
+        self._progress.setVisible(False)
+        self._btn_update.setEnabled(True)
+        self._btn_later.setEnabled(True)
+        self._status.setText("")
+        QMessageBox.warning(self, "CANkit update", f"Download failed:\n{message}")
+
+
+def schedule_update_check(parent: QWidget) -> None:
+    """Non-blocking startup check (only prompts when a newer release exists)."""
+    thread = QThread(parent)
+    worker = _CheckWorker()
+    worker.moveToThread(thread)
+
+    def _on_info(info: object) -> None:
+        thread.quit()
+        if not isinstance(info, UpdateInfo):
+            return
+        dlg = UpdateAvailableDialog(info, parent=parent)
+        dlg.exec()
+
+    def _on_fail(message: str) -> None:
+        logger.info("Update check failed: %s", message)
+        thread.quit()
+
+    thread.started.connect(worker.run)
+    worker.finished.connect(_on_info)
+    worker.failed.connect(_on_fail)
+    thread.finished.connect(worker.deleteLater)
+    thread.finished.connect(thread.deleteLater)
+    # Keep refs on parent so GC does not collect mid-flight.
+    parent._update_check_thread = thread  # type: ignore[attr-defined]
+    parent._update_check_worker = worker  # type: ignore[attr-defined]
+    thread.start()

@@ -1,6 +1,6 @@
-# XCP Variable Reader — PCAN / Vector
+# CANkit — PCAN / Vector
 
-Windows desktop tool that talks **XCP on Classic CAN / CAN FD** via **PEAK PCAN** or **Vector XL** hardware, loads **A2L** or **ELF** symbols, and reads / writes online variables (Polling or DAQ).
+Windows desktop tool (**CANkit**) that talks **XCP on Classic CAN / CAN FD** via **PEAK PCAN** or **Vector XL** hardware, loads **A2L** or **ELF** symbols, and reads / writes online variables (Polling or DAQ). Also includes Trace Viewer and UDS Diagnostic Console.
 
 ## Features
 
@@ -8,7 +8,7 @@ Windows desktop tool that talks **XCP on Classic CAN / CAN FD** via **PEAK PCAN*
 - Hardware: **PCAN** or **Vector** (UI selectable)
 - **Vector discovery**: enumerates connected interfaces (e.g. VN1630) and CAN channels via XL Driver; ↻ refresh; falls back to Channel 0–3 when nothing is detected
 - Connect / disconnect XCP slave
-- Connection essentials always visible (hardware, device/channel, TX/RX IDs); **高级配置** folds bus timing, session resilience, and Security & Cal page
+- Connection essentials always visible (hardware, device/channel, TX/RX IDs); **Advanced** folds bus timing, session resilience, and Security & Cal page
 - **A2L IF_DATA XCP**: may suggest baudrate / CAN FD only; **Master/Slave CAN IDs stay manual**
 
 ### Symbols & A2L tooling
@@ -46,7 +46,7 @@ Not included: flash programming, CANape/CANoe COM automation, full ASAP2 Updater
 1. Python 3.11+
 2. Hardware driver (one of):
    - **PCAN**: [PEAK drivers](https://www.peak-system.com/Drivers.523.0.html) (`PCANBasic.dll`)
-   - **Vector**: Vector XL Driver (`vxlapi64.dll`). Prefer selecting a discovered device/channel. If discovery shows *Not detected*, assign channels in **Vector Hardware Config** to the **Vector app name** (default `XcpReader`)
+   - **Vector**: Vector XL Driver (`vxlapi64.dll`). Prefer selecting a discovered device/channel. If discovery shows *Not detected*, assign channels in **Vector Hardware Config** to the **Vector app name** (default `CANkit`)
 3. An XCP-capable ECU (or simulator)
 
 **Note:** Do not run this tool as a second XCP master on the same channel while CANape/CANoe already owns that measurement session.
@@ -80,9 +80,9 @@ Projects default to `%USERPROFILE%\.xcp_pcan\default.xcpp` and are auto-saved on
 
 1. Select **Hardware**: PCAN or Vector  
    - PCAN: choose `PCAN_USBBUS1` etc.  
-   - Vector: pick **Device** (e.g. VN1630) + **Channel** (CAN1…); optional **Vector app name** under 高级配置  
-   - Set TX/RX CAN IDs; bitrate / CAN FD under 高级配置 if needed
-2. (Optional) Open **高级配置 → Security & Cal page**: Seed&Key, Auto unlock / Auto SET_CAL_PAGE
+   - Vector: pick **Device** (e.g. VN1630) + **Channel** (CAN1…); optional **Vector app name** under Advanced  
+   - Set TX/RX CAN IDs; bitrate / CAN FD under Advanced if needed
+2. (Optional) Open **Advanced → Security & Cal page**: Seed&Key, Auto unlock / Auto SET_CAL_PAGE
 3. Click **Connect**
 4. **Load A2L/ELF…** (or restore from project). For address-0 A2L symbols: **Resolve addresses from ELF…**. To rewrite a file on disk: **Update A2L from ELF…**
 5. Filter / select symbols → **Add to current tab** (Polling or DAQ)
@@ -109,7 +109,7 @@ While polling is running, **Write value…** briefly pauses the poller so CTOs d
 | Setting          | Default    |
 |------------------|------------|
 | Hardware         | PCAN       |
-| Vector app name  | XcpReader  |
+| Vector app name  | CANkit     |
 | Nom bitrate      | 500000     |
 | CAN FD           | off        |
 | Data bitrate     | 2000000    |
@@ -123,7 +123,7 @@ Bitrate may be suggested from A2L when present; CAN IDs are not overwritten by A
 
 ## Session resilience
 
-Under **高级配置 → Session resilience** (saved in `.xcpp` `resilience`):
+Under **Advanced → Session resilience** (saved in `.xcpp` `resilience`):
 
 | Setting | Default | Effect |
 |---------|---------|--------|
@@ -148,7 +148,7 @@ Or:
 .\build_exe.ps1
 ```
 
-Produces `output\XcpVariableReader.exe` (PyInstaller onefile, no console). Intermediate `.pyinstaller\` files are deleted after a successful build. Target PCs still need **PCAN** or **Vector** drivers installed; Python is not required.
+Produces `output\CANkit.exe` (PyInstaller onefile, no console). Intermediate `.pyinstaller\` files are deleted after a successful build. Target PCs still need **PCAN** or **Vector** drivers installed; Python is not required.
 
 ## Tests
 

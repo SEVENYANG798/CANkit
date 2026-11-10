@@ -22,6 +22,7 @@ from xcp_pcan.symbols.types import (
 )
 from xcp_pcan.ui.app_log import LogCategory
 from xcp_pcan.ui.chart_window import CurveChartDialog
+from xcp_pcan.ui.connection_panel import parse_can_id
 from xcp_pcan.ui.models import WatchTableModel
 from xcp_pcan.ui.trace_buffer import TraceBuffer
 from xcp_pcan.ui.window_util import raise_window
@@ -37,15 +38,9 @@ class MeasureMixin:
 
     def _filter_symbols(self) -> None:
         q = self.symbols.filter_text()
-        total = len(self._store.variables)
-        # Dumping tens of thousands of rows into QTableView freezes the UI.
+        # Cap rows so huge A2L/ELF dumps do not freeze QTableView; still show
+        # a browsable prefix so A2L and ELF behave the same with an empty filter.
         max_rows = 4000
-        if not q.strip() and total > max_rows:
-            self._symbol_model.set_variables([])
-            self.symbols.set_filter_status(
-                f"{total} symbol(s) loaded — type a filter (or Load lists) to show rows"
-            )
-            return
         hits = self._store.search(q)
         missing = self._store.missing_names(q)
         shown = hits[:max_rows]
@@ -59,7 +54,7 @@ class MeasureMixin:
             )
         elif len(hits) > max_rows:
             self.symbols.set_filter_status(
-                f"Showing {max_rows} of {len(hits)} matches — refine the filter"
+                f"Showing {max_rows} of {len(hits)} — refine the filter to see more"
             )
         elif not q.strip():
             self.symbols.set_filter_status(f"{len(hits)} symbol(s)")
@@ -151,10 +146,26 @@ class MeasureMixin:
         if poll_set or daq_set:
             poll_items = [by_name[n] for n in (poll_names or ()) if n in by_name]
             daq_items = [by_name[n] for n in (daq_names or ()) if n in by_name]
-            # Project watch was a flat dump with almost no list overlap —
-            # fall back to the full tagged list on Polling.
+            # Lists don't cover the saved watches — restore from the symbol store
+            # (untagged) instead of dumping every list match into Polling.
             if not poll_items and not daq_items:
-                poll_items = items
+                store = self._store.by_name()
+                for n in poll_names or ():
+                    var = store.get(n)
+                    if var is not None:
+                        poll_items.append((var, ""))
+                    elif n not in missing:
+                        missing.append(n)
+                for n in daq_names or ():
+                    var = store.get(n)
+                    if var is not None:
+                        daq_items.append((var, ""))
+                    elif n not in missing:
+                        missing.append(n)
+                self._append_log(
+                    "Symbol lists did not match project watches — "
+                    "restored Poll/DAQ names from A2L/ELF without list tags"
+                )
             return poll_items, daq_items, missing
         return items, [], missing
 
@@ -290,7 +301,9 @@ class MeasureMixin:
 
     @Slot(int)
     def _on_tab_changed(self, index: int) -> None:
-        self.statusBar().showMessage(f"Active tab: {'DAQ' if index == 1 else 'Polling'}", 2000)
+        _ = index
+        label = "DAQ" if self.watch.active_is_daq() else "Polling"
+        self.statusBar().showMessage(f"Active tab: {label}", 2000)
 
     # --- Poll / DAQ / write ----------------------------------------------------
 
@@ -338,7 +351,28 @@ class MeasureMixin:
         if not self._daq_watch_model.variables():
             QMessageBox.information(self, "Empty watch", "Add variables on the DAQ tab.")
             return
+        if self._diag_uds_rx_overlaps_xcp_slave():
+            QMessageBox.warning(
+                self,
+                "CAN ID overlap",
+                "Diagnostic Console Resp ID matches XCP Slave RX ID.\n"
+                "Stop Diagnostic Console traffic or change Resp ID before DAQ — "
+                "UDS frames would be parsed as DTO.",
+            )
+            return
         self._ensure_xcp_then(self._start_daq_impl)
+
+    def _diag_uds_rx_overlaps_xcp_slave(self) -> bool:
+        """True when Diag Resp ID == XCP slave ID (shared RX corrupts DAQ/UDS)."""
+        diag = getattr(self, "_diag_console", None)
+        if diag is None or not diag.isVisible():
+            return False
+        try:
+            xcp_rx = parse_can_id(self.connection.collect_connection().slave_can_id)
+            diag_rx = parse_can_id(diag.edt_rx.text())
+        except (TypeError, ValueError, AttributeError):
+            return False
+        return xcp_rx == diag_rx
 
     def _start_daq_impl(self) -> None:
         vars_ = self._daq_watch_model.variables()

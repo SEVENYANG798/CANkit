@@ -1,3 +1,3 @@
-"""XCP on PCAN online variable reader."""
+"""CANkit — XCP / CAN tooling (PCAN / Vector)."""
 
 __version__ = "0.1.0"

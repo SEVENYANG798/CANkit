@@ -20,6 +20,7 @@ class TraceLoadWorker(QThread):
     def __init__(self, path: str, parent=None) -> None:
         super().__init__(parent)
         self._path = path
+        self.result_frames: list[TraceFrame] | None = None
 
     def run(self) -> None:  # noqa: N802
         try:
@@ -34,6 +35,7 @@ class TraceLoadWorker(QThread):
             frames: list[TraceFrame] = load_trace(path, fmt=fmt, progress=on_progress)
             if self.isInterruptionRequested():
                 raise SymbolLoadCancelled()
+            self.result_frames = frames
             ids = {fr.arbitration_id for fr in frames}
             t0 = frames[0].timestamp if frames else 0.0
             t1 = frames[-1].timestamp if frames else 0.0
@@ -41,6 +43,7 @@ class TraceLoadWorker(QThread):
                 f"{path.name}: {len(frames)} frames, {len(ids)} IDs, "
                 f"{fmt.value.upper()}, span {t1 - t0:.3f}s"
             )
+            # Still pass frames for older slots; GUI prefers result_frames.
             self.finished_ok.emit(frames, summary)
         except SymbolLoadCancelled:
             self.cancelled.emit()
@@ -48,4 +51,11 @@ class TraceLoadWorker(QThread):
             if self.isInterruptionRequested():
                 self.cancelled.emit()
             else:
-                self.failed.emit(str(exc))
+                msg = str(exc) or type(exc).__name__
+                lower = msg.lower()
+                if "blf" in lower or type(exc).__name__.lower().startswith("blf"):
+                    msg = (
+                        f"BLF open failed: {msg}\n\n"
+                        "Check the file is a Vector BLF (LOGG header), not renamed ASC/CSV."
+                    )
+                self.failed.emit(msg)

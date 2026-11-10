@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import (
     QGroupBox,
+    QSizePolicy,
     QStyle,
     QStyleOptionGroupBox,
     QToolButton,
@@ -17,15 +18,18 @@ class CollapsibleSection(QWidget):
     """Header + body that can expand/collapse.
 
     framed=True draws a native group-box wireframe (same as Symbols), with the
-    title sitting on the top border. Click the title to toggle. No checkable
-    tool button, so the expanded state does not pick up a pressed-button shadow.
+    title sitting on the top border. Click the title to toggle.
+
+    Height is never clamped here — parents that need a collapsed pane short
+    (e.g. Log in a splitter) adjust sizes themselves. Clamping + Preferred
+    policy previously let an Expanding splitter squash Advanced content.
     """
 
     toggled = Signal(bool)
 
     def __init__(
         self,
-        title: str = "高级配置",
+        title: str = "Advanced",
         *,
         expanded: bool = False,
         indent: int = 8,
@@ -38,6 +42,9 @@ class CollapsibleSection(QWidget):
         self._indent = indent
         self._expanded = expanded
 
+        # Take content height only — do not fight Expanding siblings for space.
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -49,20 +56,18 @@ class CollapsibleSection(QWidget):
             host = QVBoxLayout(self._frame)
             self._btn = None
         else:
+            # Same ▼/▶ glyphs as framed Connection/Log titles (not QToolButton arrows).
             self._frame = None
             self._btn = QToolButton()
-            self._btn.setText(title)
+            self._btn.setText(self._frame_title(expanded))
             self._btn.setCheckable(True)
             self._btn.setChecked(expanded)
-            self._btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            self._btn.setArrowType(
-                Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
-            )
+            self._btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            self._btn.setArrowType(Qt.ArrowType.NoArrow)
             self._btn.setAutoRaise(True)
-            # Checked state must stay flat — the default pressed look reads as a shadow.
             self._btn.setStyleSheet(
                 "QToolButton {"
-                " font-weight: 600;"
+                " font-weight: normal;"
                 " border: none;"
                 " background: transparent;"
                 " padding: 2px 4px;"
@@ -76,6 +81,9 @@ class CollapsibleSection(QWidget):
             host = layout
 
         self._body = QWidget()
+        self._body.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+        )
         self._body_layout = QVBoxLayout(self._body)
         self._body_layout.setContentsMargins(self._indent, 0, 0, 0)
         self._body_layout.setSpacing(6)
@@ -91,7 +99,12 @@ class CollapsibleSection(QWidget):
 
     def set_expanded(self, expanded: bool) -> None:
         if self._btn is not None:
-            self._btn.setChecked(expanded)
+            # setChecked emits toggled → _on_toggled when the value changes
+            if self._btn.isChecked() == expanded:
+                # Keep body / arrow in sync even if checked state was already set
+                self._apply_expanded(expanded)
+            else:
+                self._btn.setChecked(expanded)
             return
         if expanded == self._expanded:
             return
@@ -106,7 +119,7 @@ class CollapsibleSection(QWidget):
     def set_title(self, title: str) -> None:
         self._title = title
         if self._btn is not None:
-            self._btn.setText(title)
+            self._btn.setText(self._frame_title(self._expanded))
         elif self._frame is not None:
             self._frame.setTitle(self._frame_title(self._expanded))
 
@@ -141,14 +154,32 @@ class CollapsibleSection(QWidget):
     def _apply_expanded(self, expanded: bool) -> None:
         self._expanded = expanded
         self._body.setVisible(expanded)
+        # When collapsed, force body out of size calculations. Some parents
+        # (QGroupBox / splitter neighbors) otherwise keep the old height and
+        # leave a blank hole — or cover siblings — after Advanced toggles.
+        if expanded:
+            self._body.setMinimumHeight(0)
+            self._body.setMaximumHeight(16777215)
+        else:
+            self._body.setMinimumHeight(0)
+            self._body.setMaximumHeight(0)
+        if self._btn is not None:
+            self._btn.setArrowType(Qt.ArrowType.NoArrow)
+            self._btn.setText(self._frame_title(expanded))
         if self._frame is not None:
             self._frame.setTitle(self._frame_title(expanded))
+        self._invalidate_up()
+
+    def _invalidate_up(self) -> None:
+        widget: QWidget | None = self
+        while widget is not None:
+            widget.updateGeometry()
+            layout = widget.layout()
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+            widget = widget.parentWidget()
 
     def _on_toggled(self, expanded: bool) -> None:
-        self._expanded = expanded
-        self._body.setVisible(expanded)
-        if self._btn is not None:
-            self._btn.setArrowType(
-                Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
-            )
+        self._apply_expanded(expanded)
         self.toggled.emit(expanded)

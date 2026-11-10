@@ -78,3 +78,32 @@ def test_dbc_decode_signals(tmp_path: Path):
 
     unknown = TraceFrame(index=1, timestamp=0.0, arbitration_id=0x123, data=b"\x00")
     assert dbc.decode(unknown) is None
+
+    msgs = dbc.list_messages()
+    assert msgs == [("TestMsg", 0x6A6)]
+    infos = dbc.list_signals()
+    assert {i.signal for i in infos} == {"Counter", "Speed"}
+    assert infos[0].frame_id <= infos[-1].frame_id
+    frames = [
+        TraceFrame(
+            index=0,
+            timestamp=1.0,
+            arbitration_id=0x6A6,
+            data=bytes([0x01, 0x64, 0x00, 0, 0, 0, 0, 0]),
+        ),
+        TraceFrame(
+            index=1,
+            timestamp=1.1,
+            arbitration_id=0x6A6,
+            data=bytes([0x02, 0xC8, 0x00, 0, 0, 0, 0, 0]),
+        ),
+        TraceFrame(index=2, timestamp=1.2, arbitration_id=0x123, data=b"\x00"),
+    ]
+    msg, unit, samples = dbc.extract_signal_series(
+        frames, frame_id=0x6A6, signal="Speed"
+    )
+    assert msg == "TestMsg"
+    assert unit == "km/h"
+    assert len(samples) == 2
+    assert abs(float(samples[0].numeric) - 10.0) < 1e-6
+    assert abs(float(samples[1].numeric) - 20.0) < 1e-6

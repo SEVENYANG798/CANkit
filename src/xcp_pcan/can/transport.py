@@ -266,7 +266,7 @@ class CanBusTransport:
         f_clock_mhz: int = 80,
         nom_sample_point: float = 80.0,
         data_sample_point: float = 80.0,
-        app_name: str = "XcpReader",
+        app_name: str = "CANkit",
         serial: int | None = None,
     ) -> None:
         if self._bus is not None:
@@ -396,7 +396,7 @@ class CanBusTransport:
         kwargs: dict = {
             "interface": "vector",
             "channel": channel,
-            "app_name": app_name or "XcpReader",
+            "app_name": app_name or "CANkit",
             "bitrate": bitrate,
             "fd": fd,
         }

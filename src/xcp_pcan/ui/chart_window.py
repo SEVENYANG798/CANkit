@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QImageWriter
 from PySide6.QtWidgets import (
@@ -78,6 +80,9 @@ class CurveChartDialog(QDialog):
         self.btn_pause = QPushButton("Pause chart")
         self.btn_pause.setCheckable(True)
         self.btn_pause.toggled.connect(self._on_pause_toggled)
+        self.btn_fit = QPushButton("Auto-fit")
+        self.btn_fit.setToolTip("Fit axes to all visible series (same as double-click).")
+        self.btn_fit.clicked.connect(self._auto_fit)
         self.btn_clear = QPushButton("Clear data")
         self.btn_clear.clicked.connect(self._clear_data)
         self.btn_save = QPushButton("Save chart")
@@ -85,6 +90,7 @@ class CurveChartDialog(QDialog):
         self.btn_refresh_list = QPushButton("Refresh series")
         self.btn_refresh_list.clicked.connect(self.sync_series_list)
         ctrl.addWidget(self.btn_pause)
+        ctrl.addWidget(self.btn_fit)
         ctrl.addWidget(self.btn_clear)
         ctrl.addWidget(self.btn_save)
         ctrl.addWidget(self.btn_refresh_list)
@@ -117,7 +123,16 @@ class CurveChartDialog(QDialog):
         mon = "Monitoring" if self._monitoring else "Stopped"
         pause = " | Chart paused" if self._paused else ""
         n = len(self._buffer.names())
-        self._status.setText(f"{mon}{pause} | {n} series in buffer")
+        pts = self._buffer.point_count()
+        span = self._buffer.span_s()
+        cap = self._buffer.maxlen
+        age = int(self._buffer.max_age_s)
+        view = " | view locked" if self._chart.view_locked() else ""
+        self._status.setText(
+            f"{mon}{pause}{view} | {n} series, {pts} pts (~{span:.1f}s kept, "
+            f"cap {cap}/series or {age}s) | "
+            "Middle-drag pan · Wheel zoom · Auto-fit / Double-click"
+        )
 
     def sync_series_list(self) -> None:
         names = self._buffer.names()
@@ -165,7 +180,13 @@ class CurveChartDialog(QDialog):
     def _on_pause_toggled(self, paused: bool) -> None:
         self._paused = paused
         self.btn_pause.setText("Resume chart" if paused else "Pause chart")
+        # Freeze painted samples so mouse redraws cannot chase live buffer growth.
+        self._chart.set_frozen(paused)
         self._update_save_enabled()
+        self._update_status()
+
+    def _auto_fit(self) -> None:
+        self._chart.reset_view()
         self._update_status()
 
     def _clear_data(self) -> None:
@@ -174,6 +195,7 @@ class CurveChartDialog(QDialog):
             self._series_layout.removeWidget(cb)
             cb.deleteLater()
         self._checkboxes.clear()
+        self._chart.reset_view()
         self._apply_visibility()
         self._update_save_enabled()
         self._update_status()
@@ -199,28 +221,52 @@ class CurveChartDialog(QDialog):
                 "Pause the chart or stop monitoring before saving.",
             )
             return
-        path, selected = QFileDialog.getSaveFileName(
+        path, _selected = QFileDialog.getSaveFileName(
             self,
             "Save chart",
             "xcp_curves.png",
-            "PNG image (*.png);;JPEG image (*.jpg *.jpeg)",
+            "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;CSV data (*.csv)",
         )
         if not path:
             return
-        # Ensure extension
         lower = path.lower()
+        if lower.endswith(".csv"):
+            try:
+                n = self._buffer.export_csv(Path(path))
+            except OSError as exc:
+                QMessageBox.critical(self, "Save failed", str(exc))
+                return
+            QMessageBox.information(
+                self, "Saved", f"Exported {n} samples (full buffer) to:\n{path}"
+            )
+            return
         if not (lower.endswith(".png") or lower.endswith(".jpg") or lower.endswith(".jpeg")):
             path += ".png"
-        # Force one redraw with current visibility
+        # Fit all buffered samples into the viewport, then grab (not just a zoomed slice).
+        prev_view = self._chart.view_state()
+        was_frozen = self._paused
+        if was_frozen:
+            # Re-freeze from current buffer after fit so PNG matches full kept history.
+            self._chart.set_frozen(False)
+        self._chart.reset_view()
+        if was_frozen:
+            self._chart.set_frozen(True)
         self._apply_visibility()
         self._chart.repaint()
         pix = self._chart.grab()
+        if was_frozen:
+            self._chart.set_frozen(True)
+        self._chart.set_view_state(*prev_view)
         ok = pix.save(path)
         if not ok:
-            # Fallback via QImageWriter for diagnostics
             writer = QImageWriter(path)
             ok = writer.write(pix.toImage())
         if ok:
-            QMessageBox.information(self, "Saved", f"Saved chart to:\n{path}")
+            QMessageBox.information(
+                self,
+                "Saved",
+                f"Saved chart (full buffer fit) to:\n{path}\n\n"
+                "Tip: choose CSV in the save dialog to export every sample.",
+            )
         else:
             QMessageBox.critical(self, "Save failed", f"Could not write:\n{path}")
