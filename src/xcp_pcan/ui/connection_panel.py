@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -53,7 +54,13 @@ class ConnectionPanel(QGroupBox):
         self._vector_devices: list[VectorDeviceInfo] = []
 
         # --- Always visible essentials -----------------------------------------
-        basic = QHBoxLayout()
+        # Minimum policy: expanding Advanced must not vertically squash these rows.
+        essentials = QWidget()
+        essentials.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
+        basic = QHBoxLayout(essentials)
+        basic.setContentsMargins(0, 0, 0, 0)
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
 
@@ -136,19 +143,18 @@ class ConnectionPanel(QGroupBox):
         btns.addWidget(self.btn_disconnect)
         btns.addStretch()
         basic.addLayout(btns)
-        root.addLayout(basic)
+        root.addWidget(essentials)
 
         # --- Collapsible advanced (bus timing + resilience + optional extras) --
         self.advanced = CollapsibleSection("Advanced", expanded=False)
+        self.advanced.toggled.connect(self._on_advanced_toggled)
         adv_row = QHBoxLayout()
 
+        # Bus/timing owns CTO knobs; resilience owns reconnect/DAQ — similar row counts.
+        # Vector XL app_name is fixed to "CANkit" (Device/serial above is enough).
         bus_box = QGroupBox("Bus / timing")
+        bus_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         bus_form = QFormLayout(bus_box)
-        self.edt_app_name = QLineEdit("CANkit")
-        self.edt_app_name.setToolTip(
-            "Vector application name — assign channels in Vector Hardware Config."
-        )
-        bus_form.addRow("Vector app name", self.edt_app_name)
 
         self.spn_fclock = QSpinBox()
         self.spn_fclock.setRange(16, 80)
@@ -162,22 +168,23 @@ class ConnectionPanel(QGroupBox):
         self.spn_timeout.setValue(1000)
         self.spn_timeout.setSuffix(" ms")
         bus_form.addRow("CTO timeout", self.spn_timeout)
-        adv_row.addWidget(bus_box)
 
-        res_box = QGroupBox("Session resilience")
-        res_form = QFormLayout(res_box)
         self.spn_cto_retries = QSpinBox()
         self.spn_cto_retries.setRange(0, 10)
         self.spn_cto_retries.setValue(2)
         self.spn_cto_retries.setToolTip("Extra CTO attempts after the first (total = 1 + retries)")
-        res_form.addRow("CTO retries", self.spn_cto_retries)
+        bus_form.addRow("CTO retries", self.spn_cto_retries)
 
         self.spn_cto_retry_delay = QSpinBox()
         self.spn_cto_retry_delay.setRange(0, 2000)
         self.spn_cto_retry_delay.setValue(50)
         self.spn_cto_retry_delay.setSuffix(" ms")
-        res_form.addRow("CTO retry delay", self.spn_cto_retry_delay)
+        bus_form.addRow("CTO retry delay", self.spn_cto_retry_delay)
+        adv_row.addWidget(bus_box, 0, Qt.AlignmentFlag.AlignTop)
 
+        res_box = QGroupBox("Session resilience")
+        res_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        res_form = QFormLayout(res_box)
         self.chk_reconnect = QCheckBox("Auto reconnect")
         self.chk_reconnect.setChecked(True)
         res_form.addRow("", self.chk_reconnect)
@@ -202,21 +209,28 @@ class ConnectionPanel(QGroupBox):
             "If no DAQ DTO arrives for this long while running, rebuild the DAQ list"
         )
         res_form.addRow("DAQ DTO silence", self.spn_daq_dto_timeout)
-        adv_row.addWidget(res_box)
+        adv_row.addWidget(res_box, 0, Qt.AlignmentFlag.AlignTop)
 
         bus_host = QWidget()
+        bus_host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         bus_host.setLayout(adv_row)
 
         # Placeholder host for Security panel (filled by MainWindow)
         self.advanced_extra = QVBoxLayout()
         self.advanced_extra.setContentsMargins(0, 0, 0, 0)
         extra_wrap = QWidget()
+        extra_wrap.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         extra_wrap.setLayout(self.advanced_extra)
 
-        # Bound Advanced body height and scroll — never push/cover Symbols/Watch.
-        adv_content = QWidget()
-        adv_content_layout = QVBoxLayout(adv_content)
-        adv_content_layout.setContentsMargins(0, 0, 0, 0)
+        # Scroll viewport is height-capped; content keeps its natural height so
+        # rows are never vertically squashed (setWidgetResizable alone would).
+        self._advanced_content = QWidget()
+        self._advanced_content.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
+        adv_content_layout = QVBoxLayout(self._advanced_content)
+        # Extra bottom pad — last Security row (Unlock resources) was clipped.
+        adv_content_layout.setContentsMargins(0, 0, 0, 24)
         adv_content_layout.setSpacing(6)
         adv_content_layout.addWidget(bus_host)
         adv_content_layout.addWidget(extra_wrap)
@@ -230,16 +244,88 @@ class ConnectionPanel(QGroupBox):
         self._advanced_scroll.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
-        self._advanced_scroll.setWidget(adv_content)
-        # Fixed viewport height so expanding Advanced never covers Symbols/Watch.
-        # Content scrolls inside; header (Advanced ▶/▼) always stays visible.
-        self._advanced_scroll.setFixedHeight(240)
+        self._advanced_scroll.setWidget(self._advanced_content)
+        self._advanced_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        # Placeholder until first expand sync (after layout + Security attach).
+        self._advanced_scroll.setFixedHeight(280)
         self.advanced.add_widget(self._advanced_scroll)
         root.addWidget(self.advanced)
 
         self._populate_channels()
         self._on_fd_toggled(False)
         self._on_hardware_changed()
+
+    def _on_advanced_toggled(self, open_: bool) -> None:
+        if open_:
+            # Defer until the body is visible and laid out — sizeHint is wrong while collapsed.
+            QTimer.singleShot(0, self.sync_advanced_scroll_height)
+            # Second pass after Security/form finish their real heights.
+            QTimer.singleShot(50, self.sync_advanced_scroll_height)
+
+    @staticmethod
+    def _natural_height(widget: QWidget) -> int:
+        """Best-effort full height (GroupBox/form sizeHint is often short)."""
+        # Do not use widget.height() — a tall temporary viewport inflates it.
+        h = max(widget.sizeHint().height(), widget.minimumSizeHint().height())
+        lay = widget.layout()
+        if lay is not None:
+            h = max(h, lay.totalSizeHint().height(), lay.totalMinimumSize().height())
+            # Nested form/box layouts (Security panel) also under-report sometimes.
+            for i in range(lay.count()):
+                item = lay.itemAt(i)
+                if item is None:
+                    continue
+                child = item.widget()
+                if child is not None:
+                    h = max(h, child.sizeHint().height() + 24)
+                child_lay = item.layout()
+                if child_lay is not None:
+                    h = max(
+                        h,
+                        child_lay.totalSizeHint().height(),
+                        child_lay.totalMinimumSize().height(),
+                    )
+        return h
+
+    def sync_advanced_scroll_height(self) -> None:
+        """Size scroll viewport from real content height; never squash rows."""
+        if not self.advanced.is_expanded():
+            return
+        content = self._advanced_content
+        # Clear stale mins from a previous collapsed/wrong hint pass.
+        content.setMinimumHeight(0)
+        content.setMaximumHeight(16777215)
+        lay = content.layout()
+        if lay is not None:
+            lay.activate()
+        content.adjustSize()
+        content.updateGeometry()
+
+        natural = 0
+        if lay is not None:
+            natural += lay.contentsMargins().top() + lay.contentsMargins().bottom()
+            for i in range(lay.count()):
+                item = lay.itemAt(i)
+                if item is None:
+                    continue
+                w = item.widget()
+                if w is not None and w.isVisible():
+                    natural += self._natural_height(w)
+                if i + 1 < lay.count():
+                    natural += lay.spacing()
+            natural = max(
+                natural,
+                lay.totalSizeHint().height(),
+                lay.totalMinimumSize().height(),
+            )
+        # Extra pad so Cal page / Seg / Page clear the clip edge.
+        hint = max(content.sizeHint().height(), natural, 200) + 64
+        content.setMinimumHeight(hint)
+        content.setMaximumHeight(16777215)
+        cap = 320
+        self._advanced_scroll.setFixedHeight(min(hint, cap))
 
     def selected_backend(self) -> HardwareBackend:
         return HardwareBackend(self.cmb_hw.currentData())
@@ -294,7 +380,6 @@ class ConnectionPanel(QGroupBox):
         self.cmb_device.setVisible(is_vector)
         self._lbl_device.setVisible(is_vector)
         self.btn_refresh_hw.setVisible(is_vector)
-        self.edt_app_name.setEnabled(is_vector)
         self.spn_fclock.setEnabled((not is_vector) and self.chk_fd.isChecked())
         if is_vector:
             self._populate_vector_devices()
@@ -312,9 +397,6 @@ class ConnectionPanel(QGroupBox):
         self.cmb_device.setEnabled(not connected)
         self.btn_refresh_hw.setEnabled(not connected)
         self.cmb_channel.setEnabled(not connected)
-        self.edt_app_name.setEnabled(
-            (not connected) and self.selected_backend() == HardwareBackend.VECTOR
-        )
         self.spn_bitrate.setEnabled(not connected)
         self.chk_fd.setEnabled(not connected)
         fd_on = self.chk_fd.isChecked()
@@ -342,7 +424,7 @@ class ConnectionPanel(QGroupBox):
         return ConnectionSettings(
             hardware=self.selected_backend().value,
             channel=channel if channel is not None else "PCAN_USBBUS1",
-            vector_app_name=self.edt_app_name.text().strip() or "CANkit",
+            vector_app_name="CANkit",
             vector_serial=self.selected_vector_serial(),
             bitrate=self.spn_bitrate.value(),
             fd=self.chk_fd.isChecked(),
@@ -370,7 +452,6 @@ class ConnectionPanel(QGroupBox):
             self._set_combo_data(self.cmb_device, conn.vector_serial)
             self._populate_channels()
         self._set_combo_data(self.cmb_channel, conn.channel)
-        self.edt_app_name.setText(conn.vector_app_name)
         self.spn_bitrate.setValue(conn.bitrate)
         self.chk_fd.setChecked(conn.fd)
         self.spn_data_bitrate.setValue(conn.data_bitrate)

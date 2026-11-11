@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QByteArray, QObject, QSettings, Qt, Signal, Slot
+from PySide6.QtCore import QByteArray, QObject, QSettings, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QColor, QKeySequence, QPalette, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -209,10 +209,21 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         )
         self._act_diag.triggered.connect(self._open_diag_console)
         toolbar.addAction(self._act_diag)
-        self._act_help = QAction("Help", self)
-        self._act_help.setToolTip("Features and how to use this tool")
-        self._act_help.triggered.connect(self._show_help)
-        toolbar.addAction(self._act_help)
+        help_menu = QMenu(self)
+        act_help = QAction("Help", self)
+        act_help.setToolTip("Features and how to use this tool")
+        act_help.triggered.connect(self._show_help)
+        act_about = QAction("About", self)
+        act_about.setToolTip("Show CANkit version")
+        act_about.triggered.connect(self._show_about)
+        help_menu.addAction(act_help)
+        help_menu.addAction(act_about)
+        btn_help = QToolButton()
+        btn_help.setText("Help")
+        btn_help.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn_help.setMenu(help_menu)
+        btn_help.setToolTip("Help and About")
+        toolbar.addWidget(btn_help)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -231,6 +242,9 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self.connection.advanced.toggled.connect(
             lambda open_: self._settings.setValue("ui_advanced_open", open_)
         )
+        # After Security is attached + Advanced maybe expanded, remeasure scroll
+        # on the next event-loop tick (sizeHint is wrong while collapsed/hidden).
+        QTimer.singleShot(0, self.connection.sync_advanced_scroll_height)
         self.connection.setTitle("")
         self.connection.setFlat(True)
         # Scope to this widget only — a bare "QGroupBox {…}" stylesheet cascades
@@ -252,6 +266,11 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._fold_connection.add_widget(self.connection)
         self._fold_connection.toggled.connect(
             lambda open_: self._settings.setValue("ui_connection_open", open_)
+        )
+        # Minimum: do not let a short window vertically crush Connection/Advanced
+        # rows (Maximum policy would shrink below sizeHint and squash controls).
+        self._fold_connection.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
         )
         # Outside the mid|log splitter: expands by a bounded Advanced scroll area
         # only, so Symbols/Watch are never covered.

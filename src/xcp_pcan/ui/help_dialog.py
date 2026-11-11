@@ -30,8 +30,8 @@ HELP_HTML = """
 <li>Trace / Diag 窗口里也可点 Connect；进度与提示会留在该窗口，不会抢主窗口焦点。</li>
 <li><b>Advanced</b>（默认收起）：
 <ul>
-<li><b>Bus / timing</b>：Vector app name（默认 CANkit，需在 Vector Hardware Config 分配通道）、PCAN FD f_clock、CTO timeout。</li>
-<li><b>Session resilience</b>：CTO 重试、自动重连、DAQ DTO 静默超时后重建列表。</li>
+<li><b>Bus / timing</b>：PCAN FD f_clock、CTO timeout / retries / retry delay（Vector 应用名固定为 CANkit）。</li>
+<li><b>Session resilience</b>：自动重连、重连次数与退避、DAQ DTO 静默超时后重建列表。</li>
 <li><b>Security &amp; Cal page</b>：Seed&amp;Key（.py 或 DLL）、Unlock resources、自动 SET_CAL_PAGE、Unlock now / SET / GET_CAL_PAGE。</li>
 </ul>
 </li>
