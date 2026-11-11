@@ -6,7 +6,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -178,8 +178,8 @@ def schedule_update_check(parent: QWidget) -> None:
         thread.quit()
         if not isinstance(info, UpdateInfo):
             return
-        dlg = UpdateAvailableDialog(info, parent=parent)
-        dlg.exec()
+        # Defer past startup UI settle — avoids a flash-dismissed dialog.
+        QTimer.singleShot(0, lambda: UpdateAvailableDialog(info, parent=parent).exec())
 
     def _on_fail(message: str) -> None:
         logger.info("Update check failed: %s", message)
@@ -190,7 +190,89 @@ def schedule_update_check(parent: QWidget) -> None:
     worker.failed.connect(_on_fail)
     thread.finished.connect(worker.deleteLater)
     thread.finished.connect(thread.deleteLater)
-    # Keep refs on parent so GC does not collect mid-flight.
     parent._update_check_thread = thread  # type: ignore[attr-defined]
     parent._update_check_worker = worker  # type: ignore[attr-defined]
     thread.start()
+
+
+class AboutDialog(QDialog):
+    """About box: app name, real version; opens download dialog when an update exists."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("About CANkit")
+        self.setMinimumWidth(360)
+        self._update_info: UpdateInfo | None = None
+        self._thread: QThread | None = None
+        self._worker: QObject | None = None
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel(f"app name：CANkit\nversion number:{__version__}"))
+        self._status = QLabel("Checking for updates…")
+        self._status.setWordWrap(True)
+        root.addWidget(self._status)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self._btn_ok = QPushButton("OK")
+        self._btn_ok.setDefault(True)
+        self._btn_ok.clicked.connect(self.accept)
+        row.addWidget(self._btn_ok)
+        root.addLayout(row)
+
+        self._start_check()
+
+    def _start_check(self) -> None:
+        thread = QThread(self)
+        worker = _CheckWorker()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_check_done)
+        worker.failed.connect(self._on_check_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_check_thread)
+        self._thread = thread
+        self._worker = worker
+        thread.start()
+
+    @Slot()
+    def _clear_check_thread(self) -> None:
+        self._thread = None
+        self._worker = None
+
+    @Slot(object)
+    def _on_check_done(self, info: object) -> None:
+        if isinstance(info, UpdateInfo):
+            self._update_info = info
+            self._status.setText(f"Update available: {info.version}.")
+            QTimer.singleShot(0, self._open_update)
+            return
+        self._status.setText(
+            "No updates detected. You are already on the latest version."
+        )
+
+    @Slot(str)
+    def _on_check_failed(self, message: str) -> None:
+        self._status.setText(f"Could not check for updates:\n{message}")
+
+    def _open_update(self) -> None:
+        info = self._update_info
+        if info is None:
+            return
+        UpdateAvailableDialog(info, parent=self).exec()
+
+    def closeEvent(self, event) -> None:  # noqa: ANN001 — Qt override
+        thread = self._thread
+        if thread is not None:
+            try:
+                if thread.isRunning():
+                    thread.quit()
+                    thread.wait(3000)
+            except RuntimeError:
+                pass
+            self._thread = None
+            self._worker = None
+        super().closeEvent(event)

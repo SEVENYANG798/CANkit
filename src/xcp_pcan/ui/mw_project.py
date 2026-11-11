@@ -209,11 +209,7 @@ class ProjectMixin:
         raise_window(self._help_dialog)
 
     def _show_about(self) -> None:
-        from xcp_pcan import __version__
+        from xcp_pcan.ui.update_dialog import AboutDialog
 
-        QMessageBox.about(
-            self,
-            "About CANkit",
-            f"CANkit\nVersion {__version__}",
-        )
+        AboutDialog(self).exec()
 

@@ -214,7 +214,7 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         act_help.setToolTip("Features and how to use this tool")
         act_help.triggered.connect(self._show_help)
         act_about = QAction("About", self)
-        act_about.setToolTip("Show CANkit version")
+        act_about.setToolTip("Show CANkit version and check for updates")
         act_about.triggered.connect(self._show_about)
         help_menu.addAction(act_help)
         help_menu.addAction(act_about)
