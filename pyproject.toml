@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cankit"
-version = "0.1.9"
+version = "0.1.10"
 description = "CANkit 鈥?XCP / CAN tooling (A2L/ELF, DAQ, Trace, UDS) via PCAN or Vector"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -52,7 +52,10 @@ class _TxStrip(QWidget):
         super().__init__(parent)
         self.setFixedWidth(_TX_STRIP_WIDTH)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-        self.setStyleSheet("background-color: #e8e8e8; border: none;")
+        self.setAutoFillBackground(True)
+        pal = self.palette()
+        pal.setColor(QPalette.ColorRole.Window, QColor("#e8e8e8"))
+        self.setPalette(pal)
 
     def sizeHint(self) -> QSize:  # noqa: N802 — Qt
         return QSize(_TX_STRIP_WIDTH, 80)
@@ -60,6 +63,7 @@ class _TxStrip(QWidget):
     def paintEvent(self, event) -> None:  # noqa: ANN001, N802 — Qt
         del event
         painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor("#e8e8e8"))
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         painter.setPen(QColor("#424242"))
         painter.setFont(QFont(self.font().family(), 9, QFont.Weight.DemiBold))
@@ -186,7 +190,6 @@ class TraceTxPanel(QWidget):
         )
 
         # Left rail: header-height cap (same color as column headers) + Tx body strip.
-        # Avoids the empty corner where a full-height strip met the header.
         left = QWidget()
         left.setFixedWidth(_TX_STRIP_WIDTH)
         left_lay = QVBoxLayout(left)
@@ -194,16 +197,29 @@ class TraceTxPanel(QWidget):
         left_lay.setSpacing(0)
         head_cap = QWidget()
         head_cap.setFixedSize(_TX_STRIP_WIDTH, header_h)
+        head_cap.setAutoFillBackground(True)
+        head_pal = head_cap.palette()
+        head_pal.setColor(QPalette.ColorRole.Window, QColor(_TX_HEADER_BG))
+        head_cap.setPalette(head_pal)
         head_cap.setStyleSheet(
             f"background-color: {_TX_HEADER_BG};"
             f"border: none;"
-            f"border-right: 1px solid {_TX_GRID};"
             f"border-bottom: 1px solid {_TX_GRID};"
         )
         tx_strip = _TxStrip(self)
         tx_strip.setFixedHeight(body_h)
         left_lay.addWidget(head_cap)
         left_lay.addWidget(tx_strip, stretch=1)
+
+        # Real 1px rule between Tx rail and table (stylesheet borders on paint widgets are flaky).
+        vrule = QWidget()
+        vrule.setFixedWidth(1)
+        vrule.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        vrule.setAutoFillBackground(True)
+        vpal = vrule.palette()
+        vpal.setColor(QPalette.ColorRole.Window, QColor(_TX_GRID))
+        vrule.setPalette(vpal)
+        vrule.setStyleSheet(f"background-color: {_TX_GRID}; border: none;")
 
         # Outer box so top/bottom/sides are complete (table alone had no top line).
         frame = QFrame()
@@ -215,6 +231,7 @@ class TraceTxPanel(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
         row.addWidget(left)
+        row.addWidget(vrule)
         row.addWidget(self._table, stretch=1)
 
         root = QVBoxLayout(self)
@@ -357,6 +374,11 @@ class TraceTxPanel(QWidget):
         if chk is not None and chk.isChecked():
             if self._start_cycle(row):
                 self._set_send_label(row, "Stop")
+            else:
+                # Keep mode honest when period/bus/send fails.
+                chk.blockSignals(True)
+                chk.setChecked(False)
+                chk.blockSignals(False)
             return
         # Unchecked → single shot.
         self._send_row(row)

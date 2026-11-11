@@ -113,7 +113,10 @@ class ConnectMixin:
     def _connect_ui_parent(self) -> QWidget:
         """Prefer the tool window that started Connect so progress stays there."""
         front = getattr(self, "_connect_keep_front", None)
-        return front if front is not None else self
+        if front is not None:
+            return front
+        parent = getattr(self, "_dialog_parent", None)
+        return parent() if callable(parent) else self
 
     def _restore_connect_front(self) -> None:
         front = getattr(self, "_connect_keep_front", None)
@@ -206,6 +209,10 @@ class ConnectMixin:
         self._pending_after_xcp = None
         # Lock hardware controls while connecting (same as connected).
         self.connection.set_connected(True)
+        self._act_can_connect.setEnabled(False)
+        self._act_can_disconnect.setEnabled(True)
+        if self._trace_viewer is not None:
+            self._trace_viewer.sync_toolbar_actions(bus_open=False, busy=True)
         progress = make_progress_dialog(
             ui,
             title="Connect",
@@ -273,6 +280,10 @@ class ConnectMixin:
             return
         self._pending_after_xcp = action
         self._connect_meta = {"kind": "xcp"}
+        self._act_can_connect.setEnabled(False)
+        self._act_can_disconnect.setEnabled(True)
+        if self._trace_viewer is not None:
+            self._trace_viewer.sync_toolbar_actions(bus_open=True, busy=True)
         progress = make_progress_dialog(
             self, title="XCP", label="XCP CONNECT…", cancel_text="Cancel", maximum=0
         )

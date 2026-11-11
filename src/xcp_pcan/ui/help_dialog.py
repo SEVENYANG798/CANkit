@@ -51,7 +51,7 @@ HELP_HTML = """
 <ul>
 <li>能对上的符号进入当前 Polling / DAQ 并按标签分组；仅差前导下划线也会匹配（<code>Foo</code> ↔ <code>_Foo</code>）。</li>
 <li>含中文、路径或空格的行会使整份 txt 被跳过（说明文件不会当名单）。未匹配名写在 Status 里。</li>
-<li>观测树支持 <b>Fold all / Expand all</b>；选中标签后 <b>Remove</b> 可去掉该组。</li>
+<li>观测树：工具条保留 Start/Stop/Write；<b>Actions</b> 菜单含 Graphic、Export CSV、Remove、Clear、Fold all。</li>
 </ul>
 
 <h3>5. Polling / DAQ 与标定</h3>
@@ -59,7 +59,7 @@ HELP_HTML = """
 <li><b>Polling</b>：设 Interval 后 <b>Start poll</b>，周期 SHORT_UPLOAD / UPLOAD。日常读 MEASUREMENT 优先用它。</li>
 <li><b>DAQ</b>：设 Event、Prescaler 后 <b>Start DAQ</b>。同一会话不要与 Polling 同时跑。</li>
 <li><b>Write value</b>：仅标量 <b>VALUE</b> 型 CHARACTERISTIC。MEASUREMENT / CURVE / MAP / VAL_BLK 只读。DAQ 运行中禁止写；Polling 写时会短暂停轮询。</li>
-<li><b>Curves</b>：当前页变量曲线。<b>Export CSV</b>：导出缓冲采样（time_s / timestamp / name / value / unit）。</li>
+<li><b>Graphic</b>：当前页变量曲线。<b>Export CSV</b>：导出缓冲采样（time_s / timestamp / name / value / unit）。</li>
 </ul>
 
 <h3>6. Trace Viewer</h3>

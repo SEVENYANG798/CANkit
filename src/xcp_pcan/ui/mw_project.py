@@ -185,9 +185,11 @@ class ProjectMixin:
                 self,
                 transport=self._transport,
                 on_connect=lambda: self._connect(keep_front=self._diag_console),
+                host=self,
             )
         else:
             self._diag_console.set_transport(self._transport)
+            self._diag_console.set_host(self)
             self._diag_console.set_on_connect(
                 lambda: self._connect(keep_front=self._diag_console)
             )

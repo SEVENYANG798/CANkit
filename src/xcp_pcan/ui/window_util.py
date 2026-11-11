@@ -3,7 +3,22 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QApplication, QWidget
+
+
+def dialog_parent(fallback: QWidget | None = None) -> QWidget | None:
+    """Parent for modal file/message dialogs: prefer the active top-level window.
+
+    Tool windows clear Qt parent ownership. If a MainWindow slot opens
+    ``QFileDialog(self)``, Windows raises the main HWND. Using the active
+    window keeps the picker on the surface the user clicked (XCP Viewer, …).
+    """
+    app = QApplication.instance()
+    if app is not None:
+        active = app.activeWindow()
+        if isinstance(active, QWidget) and active.isVisible():
+            return active
+    return fallback
 
 
 def configure_tool_window(widget: QWidget) -> None:

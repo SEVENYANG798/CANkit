@@ -68,6 +68,12 @@ class _Bridge(QObject):
 
 
 class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMainWindow):
+    def _dialog_parent(self) -> QWidget:
+        """Active tool window when focused, else main — keeps file/message dialogs on top."""
+        from xcp_pcan.ui.window_util import dialog_parent
+
+        return dialog_parent(self) or self
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("CANkit — PCAN / Vector")
@@ -275,7 +281,7 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
             self._settings,
             self,
             transport=self._transport,
-            on_connect=self._connect,
+            on_connect=self._open_connect_dialog,
             on_disconnect=self._disconnect,
         )
         self._trace_viewer.setSizePolicy(
@@ -555,6 +561,18 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
                 self._trace_viewer.abort_loading()
             except Exception:  # noqa: BLE001
                 logger.debug("Trace viewer abort failed", exc_info=True)
+
+        update_thread = getattr(self, "_update_check_thread", None)
+        if update_thread is not None:
+            try:
+                if update_thread.isRunning():
+                    update_thread.quit()
+                    update_thread.wait(3000)
+            except RuntimeError:
+                logger.debug("Update-check thread stop failed", exc_info=True)
+            self._update_check_thread = None
+            self._update_check_worker = None
+            self._update_check_bridge = None
 
     def _close_tool_windows(self) -> None:
         """Tool windows are top-level (no transient parent); close them with the app."""

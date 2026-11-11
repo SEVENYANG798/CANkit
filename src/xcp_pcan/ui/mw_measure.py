@@ -78,14 +78,17 @@ class MeasureMixin:
 
     @Slot()
     def _load_symbol_lists(self) -> None:
+        ui = self._dialog_parent()
         start = str(self._settings.value("ui_symbol_list_dir", "") or "")
-        folder = QFileDialog.getExistingDirectory(self, "Symbol list folder", start)
+        folder = QFileDialog.getExistingDirectory(ui, "Symbol list folder", start)
+        if ui is not self:
+            raise_window(ui)
         if not folder:
             return
         groups = load_symbol_list_dir(Path(folder))
         if not groups:
             QMessageBox.information(
-                self, "No lists", "That folder has no .txt files with symbol names."
+                ui, "No lists", "That folder has no .txt files with symbol names."
             )
             return
         self._symbol_groups = groups
@@ -206,7 +209,7 @@ class MeasureMixin:
     def _add_selected_to_watch(self) -> None:
         vars_ = self.symbols.selected_variables()
         if not vars_:
-            QMessageBox.information(self, "No selection", "Select rows in the symbol list.")
+            QMessageBox.information(self._dialog_parent(), "No selection", "Select rows in the symbol list.")
             return
         self._add_variables_to_watch(vars_)
 
@@ -214,7 +217,7 @@ class MeasureMixin:
     def _add_all_filtered_to_watch(self) -> None:
         vars_ = self.symbols.visible_variables()
         if not vars_:
-            QMessageBox.information(self, "Empty filter", "No symbols in the filtered list.")
+            QMessageBox.information(self._dialog_parent(), "Empty filter", "No symbols in the filtered list.")
             return
         self._add_variables_to_watch(vars_)
 
@@ -257,8 +260,7 @@ class MeasureMixin:
     def _open_poll_chart(self) -> None:
         if self._poll_chart is None:
             self._poll_chart = CurveChartDialog(
-                self._poll_traces, title="Polling curves", parent=self
-            )
+                self._poll_traces, title="Polling curves", parent=self._dialog_parent())
         self._poll_chart.set_monitoring(self._poller.is_running)
         self._poll_chart.sync_series_list()
         raise_window(self._poll_chart)
@@ -266,23 +268,20 @@ class MeasureMixin:
     def _open_daq_chart(self) -> None:
         if self._daq_chart is None:
             self._daq_chart = CurveChartDialog(
-                self._daq_traces, title="DAQ curves", parent=self
-            )
+                self._daq_traces, title="DAQ curves", parent=self._dialog_parent())
         self._daq_chart.set_monitoring(self._daq.is_running)
         self._daq_chart.sync_series_list()
         raise_window(self._daq_chart)
 
     def _export_csv(self, buffer: TraceBuffer, label: str) -> None:
         if buffer.point_count() == 0:
-            QMessageBox.information(
-                self,
+            QMessageBox.information(self._dialog_parent(),
                 "No samples",
                 f"No {label} samples buffered yet. Start poll/DAQ and wait for values.",
             )
             return
         start = str(self._settings.value("ui_export_dir", "") or "")
-        path, _ = QFileDialog.getSaveFileName(
-            self,
+        path, _ = QFileDialog.getSaveFileName(self._dialog_parent(),
             f"Export {label} CSV",
             start,
             "CSV (*.csv);;All (*.*)",
@@ -297,7 +296,7 @@ class MeasureMixin:
             self._append_log(f"Exported {rows} {label} sample(s) → {path}")
             self.statusBar().showMessage(f"Exported {rows} rows", 4000)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Export failed", str(exc))
+            QMessageBox.critical(self._dialog_parent(), "Export failed", str(exc))
 
     @Slot(int)
     def _on_tab_changed(self, index: int) -> None:
@@ -310,12 +309,11 @@ class MeasureMixin:
     @Slot()
     def _start_poll(self) -> None:
         if self._daq.is_running:
-            QMessageBox.information(
-                self, "DAQ running", "Stop DAQ before starting polling (same XCP session)."
+            QMessageBox.information(self._dialog_parent(), "DAQ running", "Stop DAQ before starting polling (same XCP session)."
             )
             return
         if not self._poll_watch_model.variables():
-            QMessageBox.information(self, "Empty watch", "Add variables on the Polling tab.")
+            QMessageBox.information(self._dialog_parent(), "Empty watch", "Add variables on the Polling tab.")
             return
         self._ensure_xcp_then(self._start_poll_impl)
 
@@ -329,7 +327,7 @@ class MeasureMixin:
                 self._poll_chart.set_monitoring(True)
             self._append_log(f"Poll started @ {self.watch.spn_poll.value()} ms")
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "Poll failed", str(exc))
+            QMessageBox.critical(self._dialog_parent(), "Poll failed", str(exc))
 
     @Slot()
     def _stop_poll(self) -> None:
@@ -344,16 +342,14 @@ class MeasureMixin:
     @Slot()
     def _start_daq(self) -> None:
         if self._poller.is_running:
-            QMessageBox.information(
-                self, "Polling running", "Stop polling before starting DAQ (same XCP session)."
+            QMessageBox.information(self._dialog_parent(), "Polling running", "Stop polling before starting DAQ (same XCP session)."
             )
             return
         if not self._daq_watch_model.variables():
-            QMessageBox.information(self, "Empty watch", "Add variables on the DAQ tab.")
+            QMessageBox.information(self._dialog_parent(), "Empty watch", "Add variables on the DAQ tab.")
             return
         if self._diag_uds_rx_overlaps_xcp_slave():
-            QMessageBox.warning(
-                self,
+            QMessageBox.warning(self._dialog_parent(),
                 "CAN ID overlap",
                 "Diagnostic Console Resp ID matches XCP Slave RX ID.\n"
                 "Stop Diagnostic Console traffic or change Resp ID before DAQ — "
@@ -403,7 +399,7 @@ class MeasureMixin:
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("DAQ start failed")
-            QMessageBox.critical(self, "DAQ failed", str(exc))
+            QMessageBox.critical(self._dialog_parent(), "DAQ failed", str(exc))
             self._append_log(f"DAQ ERROR: {exc}")
             try:
                 self._daq.stop()
@@ -423,24 +419,22 @@ class MeasureMixin:
 
     def _write_selected(self, model: WatchTableModel, table) -> None:
         if self._daq.is_running:
-            QMessageBox.information(
-                self,
+            QMessageBox.information(self._dialog_parent(),
                 "DAQ running",
                 "Stop DAQ before writing. Downloads share the same CTO path as DAQ setup.",
             )
             return
         rows = table.selectionModel().selectedRows()
         if not rows:
-            QMessageBox.information(self, "No selection", "Select one variable in the watch list.")
+            QMessageBox.information(self._dialog_parent(), "No selection", "Select one variable in the watch list.")
             return
         var = model.variable_at(rows[0])
         if var is None:
-            QMessageBox.information(self, "No selection", "Select one variable, not the group label.")
+            QMessageBox.information(self._dialog_parent(), "No selection", "Select one variable, not the group label.")
             return
         if not var.writable:
             kind = var.characteristic_type or var.kind.value
-            QMessageBox.warning(
-                self,
+            QMessageBox.warning(self._dialog_parent(),
                 "Not writable",
                 f"«{var.name}» is not a scalar VALUE characteristic ({kind}).\n"
                 "CURVE / MAP / VAL_BLK and MEASUREMENT rows are read-only here "
@@ -448,10 +442,10 @@ class MeasureMixin:
             )
             return
         if var.address == 0:
-            QMessageBox.warning(self, "No address", f"«{var.name}» has address 0.")
+            QMessageBox.warning(self._dialog_parent(), "No address", f"«{var.name}» has address 0.")
             return
 
-        dlg = WriteValueDialog(var, parent=self)
+        dlg = WriteValueDialog(var, parent=self._dialog_parent())
         if dlg.exec() != WriteValueDialog.DialogCode.Accepted:
             return
         phys = dlg.physical_value()
@@ -499,14 +493,13 @@ class MeasureMixin:
                     category=LogCategory.ERROR,
                     level=logging.ERROR,
                 )
-                QMessageBox.warning(self, info.title, info.message())
+                QMessageBox.warning(self._dialog_parent(), info.title, info.message())
             else:
                 self._append_log(
                     f"WRITE {var.name} phys={phys} → raw={raw_num} "
                     f"bytes={payload.hex()} readback={back_phys}"
                 )
-                QMessageBox.information(
-                    self,
+                QMessageBox.information(self._dialog_parent(),
                     "Write OK",
                     f"Wrote {var.name}\nPhysical: {phys}\nReadback: {back_phys}",
                 )
@@ -518,7 +511,7 @@ class MeasureMixin:
                 category=LogCategory.ERROR,
                 level=logging.ERROR,
             )
-            QMessageBox.critical(self, info.title, info.message())
+            QMessageBox.critical(self._dialog_parent(), info.title, info.message())
         finally:
             if poll_paused:
                 self._poller.resume()

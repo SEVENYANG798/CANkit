@@ -184,7 +184,7 @@ class _UpdateCheckBridge(QObject):
 
     def _show(self, info: UpdateInfo) -> None:
         ui = self._ui
-        if ui is None:
+        if ui is None or not ui.isVisible() or getattr(ui, "_closing", False):
             return
         UpdateAvailableDialog(info, parent=ui).exec()
 

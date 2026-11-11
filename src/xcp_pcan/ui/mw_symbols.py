@@ -55,14 +55,13 @@ class SymbolToolsMixin:
         on_done=None,
     ) -> None:
         if self._symbol_load_busy():
-            QMessageBox.information(self, "Busy", "A symbol file is already loading — please wait.")
+            QMessageBox.information(self._dialog_parent(), "Busy", "A symbol file is already loading — please wait.")
             return
         self._load_cancelled = False
         self._load_apply_transport = apply_transport
         self._load_on_done = on_done
         # Non-modal: allow editing connection / IDs while a large A2L loads.
-        progress = make_progress_dialog(
-            self,
+        progress = make_progress_dialog(self._dialog_parent(),
             title="Symbol load",
             label="Loading symbols…",
             cancel_text="Cancel",
@@ -180,8 +179,7 @@ class SymbolToolsMixin:
             and load_mode == "replace"
             and Path(self._store.source_path).suffix.lower() == ".a2l"
         ):
-            ans = QMessageBox.question(
-                self,
+            ans = QMessageBox.question(self._dialog_parent(),
                 "Addresses missing",
                 f"{missing} symbol(s) have address 0.\n\nResolve from an ELF now?",
             )
@@ -194,7 +192,7 @@ class SymbolToolsMixin:
             return
         logger.error("Symbol load failed: %s", message)
         self._append_log(f"ERROR load symbols: {message}")
-        QMessageBox.critical(self, "Load failed", message)
+        QMessageBox.critical(self._dialog_parent(), "Load failed", message)
 
     @Slot()
     def _on_symbol_load_thread_finished(self) -> None:
@@ -207,8 +205,7 @@ class SymbolToolsMixin:
     @Slot()
     def _load_symbols(self) -> None:
         start = str(Path(self._store.source_path).parent) if self._store.source_path else ""
-        path, _ = QFileDialog.getOpenFileName(
-            self,
+        path, _ = QFileDialog.getOpenFileName(self._dialog_parent(),
             "Load symbols",
             start,
             "Symbol files (*.a2l *.A2L *.elf *.ELF *.out);;A2L (*.a2l);;ELF (*.elf *.out);;All (*.*)",
@@ -219,11 +216,10 @@ class SymbolToolsMixin:
     @Slot()
     def _resolve_from_elf(self) -> None:
         if not self._store.variables:
-            QMessageBox.information(self, "No A2L symbols", "Load an A2L first.")
+            QMessageBox.information(self._dialog_parent(), "No A2L symbols", "Load an A2L first.")
             return
         start = str(Path(self._store.source_path).parent) if self._store.source_path else ""
-        path, _ = QFileDialog.getOpenFileName(
-            self, "ELF for address resolution", start, "ELF (*.elf *.out *.axf);;All (*.*)"
+        path, _ = QFileDialog.getOpenFileName(self._dialog_parent(), "ELF for address resolution", start, "ELF (*.elf *.out *.axf);;All (*.*)"
         )
         if not path:
             return
@@ -237,19 +233,17 @@ class SymbolToolsMixin:
     @Slot()
     def _elf_to_a2l(self) -> None:
         if self._elf2a2l_worker is not None and self._elf2a2l_worker.isRunning():
-            QMessageBox.information(self, "Busy", "Create A2L from ELF is already running.")
+            QMessageBox.information(self._dialog_parent(), "Busy", "Create A2L from ELF is already running.")
             return
         dlg = Elf2A2lDialog(
             self._settings,
             master_id=self.connection.edt_tx.text().strip(),
-            slave_id=self.connection.edt_rx.text().strip(),
-            parent=self,
+            slave_id=self.connection.edt_rx.text().strip(), parent=self._dialog_parent(),
         )
         if dlg.exec() != dlg.DialogCode.Accepted:
             return
         vals = dlg.values()
-        progress = make_progress_dialog(
-            self,
+        progress = make_progress_dialog(self._dialog_parent(),
             title="Create A2L from ELF",
             label="Reading ELF…",
             cancel_text=None,
@@ -285,8 +279,7 @@ class SymbolToolsMixin:
             return
         self._append_log(summary, category=LogCategory.APP)
         out = getattr(self, "_elf2a2l_output", "")
-        ans = QMessageBox.question(
-            self,
+        ans = QMessageBox.question(self._dialog_parent(),
             "Create A2L from ELF",
             f"{summary}\n\nLoad this A2L now?",
         )
@@ -299,7 +292,7 @@ class SymbolToolsMixin:
             return
         logger.error("Create A2L from ELF failed: %s", message)
         self._append_log(f"ERROR Create A2L from ELF: {message}")
-        QMessageBox.critical(self, "Create A2L from ELF failed", message)
+        QMessageBox.critical(self._dialog_parent(), "Create A2L from ELF failed", message)
 
     @Slot()
     def _on_elf2a2l_finished(self) -> None:
@@ -315,16 +308,14 @@ class SymbolToolsMixin:
     def _update_a2l_from_elf(self) -> None:
         """Rewrite A2L ECU_ADDRESS from ELF (file output), ASAP2 Updater style."""
         if self._a2l_update_busy():
-            QMessageBox.information(
-                self, "Busy", "An A2L update is already running — check the progress window."
+            QMessageBox.information(self._dialog_parent(), "Busy", "An A2L update is already running — check the progress window."
             )
             return
 
         start = ""
         if self._store.source_path and Path(self._store.source_path).suffix.lower() == ".a2l":
             start = self._store.source_path
-        a2l_path, _ = QFileDialog.getOpenFileName(
-            self,
+        a2l_path, _ = QFileDialog.getOpenFileName(self._dialog_parent(),
             "A2L to update",
             start,
             "A2L (*.a2l *.A2L);;All (*.*)",
@@ -332,8 +323,7 @@ class SymbolToolsMixin:
         if not a2l_path:
             return
         elf_start = str(Path(a2l_path).parent)
-        elf_path, _ = QFileDialog.getOpenFileName(
-            self,
+        elf_path, _ = QFileDialog.getOpenFileName(self._dialog_parent(),
             "ELF with symbol addresses",
             elf_start,
             "ELF (*.elf *.out *.axf);;All (*.*)",
@@ -341,8 +331,7 @@ class SymbolToolsMixin:
         if not elf_path:
             return
         default_out = str(Path(a2l_path).with_name(Path(a2l_path).stem + "_updated.a2l"))
-        out_path, _ = QFileDialog.getSaveFileName(
-            self,
+        out_path, _ = QFileDialog.getSaveFileName(self._dialog_parent(),
             "Save updated A2L",
             default_out,
             "A2L (*.a2l);;All (*.*)",
@@ -352,8 +341,7 @@ class SymbolToolsMixin:
 
         self._a2l_update_cancelled = False
         # Non-modal: main window stays fully interactive while update runs.
-        progress = make_progress_dialog(
-            self,
+        progress = make_progress_dialog(self._dialog_parent(),
             title="Update A2L from ELF",
             label="Updating A2L…",
             cancel_text="Cancel",
@@ -421,8 +409,7 @@ class SymbolToolsMixin:
             sample = ", ".join(report.missing[:6])
             more = f" (+{len(report.missing) - 6} more)" if len(report.missing) > 6 else ""
             missing_preview = f"\n\nNo ELF match:\n{sample}{more}"
-        ans = QMessageBox.question(
-            self,
+        ans = QMessageBox.question(self._dialog_parent(),
             "A2L updated",
             f"{report.summary()}\n\nSaved to:\n{out_path}{missing_preview}"
             f"\n\nLoad the updated A2L now?",
@@ -436,7 +423,7 @@ class SymbolToolsMixin:
             return
         logger.error("A2L update failed: %s", message)
         self._append_log(f"ERROR update A2L: {message}")
-        QMessageBox.critical(self, "Update A2L failed", message)
+        QMessageBox.critical(self._dialog_parent(), "Update A2L failed", message)
 
     @Slot()
     def _on_a2l_update_thread_finished(self) -> None:

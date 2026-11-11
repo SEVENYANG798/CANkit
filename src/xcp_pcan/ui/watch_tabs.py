@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QModelIndex, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QSpinBox,
     QTabWidget,
+    QToolButton,
     QTreeView,
     QVBoxLayout,
     QWidget,
@@ -48,12 +51,21 @@ class WatchTabs(QTabWidget):
         super().__init__(parent)
         self._poll_model = poll_model
         self._daq_model = daq_model
-        self._fold_btns: dict[QTreeView, QPushButton] = {}
+        self._fold_acts: dict[QTreeView, QAction] = {}
         self._folded: dict[QTreeView, bool] = {}
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.addTab(self._build_daq_tab(), "DAQ")
         self.addTab(self._build_poll_tab(), "Polling")
         self.currentChanged.connect(self.tab_changed.emit)
+
+    @staticmethod
+    def _actions_button(menu: QMenu) -> QToolButton:
+        btn = QToolButton()
+        btn.setText("Actions")
+        btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn.setMenu(menu)
+        btn.setToolTip("Graphic, export, remove, clear, fold")
+        return btn
 
     def _build_poll_tab(self) -> QWidget:
         page = QWidget()
@@ -61,6 +73,7 @@ class WatchTabs(QTabWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
 
+        # Primary strip: timing + start/stop + write. Secondary → Actions menu.
         ctrl = QHBoxLayout()
         self.spn_poll = QSpinBox()
         self.spn_poll.setRange(10, 10_000)
@@ -74,25 +87,30 @@ class WatchTabs(QTabWidget):
         self.btn_poll_stop.clicked.connect(self.poll_stop.emit)
         self.btn_write = QPushButton("Write value")
         self.btn_write.clicked.connect(self.poll_write.emit)
-        self.btn_poll_curves = QPushButton("Curves")
-        self.btn_poll_curves.clicked.connect(self.poll_curves.emit)
-        self.btn_poll_export = QPushButton("Export CSV")
-        self.btn_poll_export.setToolTip("Export buffered polling samples to a CSV file.")
-        self.btn_poll_export.clicked.connect(self.poll_export.emit)
-        btn_remove = QPushButton("Remove")
-        btn_remove.clicked.connect(self.poll_remove.emit)
-        btn_clear = QPushButton("Clear")
-        btn_clear.clicked.connect(self.poll_clear.emit)
-        self.tbl_poll = self._make_watch_view(self._poll_model)
-        self.btn_poll_fold = self._make_fold_button(self.tbl_poll)
         ctrl.addWidget(self.btn_poll_start)
         ctrl.addWidget(self.btn_poll_stop)
         ctrl.addWidget(self.btn_write)
-        ctrl.addWidget(self.btn_poll_curves)
-        ctrl.addWidget(self.btn_poll_export)
-        ctrl.addWidget(btn_remove)
-        ctrl.addWidget(btn_clear)
-        ctrl.addWidget(self.btn_poll_fold)
+
+        self.tbl_poll = self._make_watch_view(self._poll_model)
+        act_curves = QAction("Graphic", self)
+        act_curves.triggered.connect(self.poll_curves.emit)
+        act_export = QAction("Export CSV", self)
+        act_export.setToolTip("Export buffered polling samples to a CSV file.")
+        act_export.triggered.connect(self.poll_export.emit)
+        act_remove = QAction("Remove", self)
+        act_remove.triggered.connect(self.poll_remove.emit)
+        act_clear = QAction("Clear", self)
+        act_clear.triggered.connect(self.poll_clear.emit)
+        self.act_poll_fold = self._make_fold_action(self.tbl_poll)
+        menu = QMenu(self)
+        menu.addAction(act_curves)
+        menu.addAction(act_export)
+        menu.addSeparator()
+        menu.addAction(act_remove)
+        menu.addAction(act_clear)
+        menu.addSeparator()
+        menu.addAction(self.act_poll_fold)
+        ctrl.addWidget(self._actions_button(menu))
         ctrl.addStretch()
         layout.addLayout(ctrl)
         layout.addWidget(self.tbl_poll, stretch=1)
@@ -129,25 +147,30 @@ class WatchTabs(QTabWidget):
         self.btn_daq_stop.clicked.connect(self.daq_stop.emit)
         self.btn_daq_write = QPushButton("Write value")
         self.btn_daq_write.clicked.connect(self.daq_write.emit)
-        self.btn_daq_curves = QPushButton("Curves")
-        self.btn_daq_curves.clicked.connect(self.daq_curves.emit)
-        self.btn_daq_export = QPushButton("Export CSV")
-        self.btn_daq_export.setToolTip("Export buffered DAQ samples to a CSV file.")
-        self.btn_daq_export.clicked.connect(self.daq_export.emit)
-        btn_remove = QPushButton("Remove")
-        btn_remove.clicked.connect(self.daq_remove.emit)
-        btn_clear = QPushButton("Clear")
-        btn_clear.clicked.connect(self.daq_clear.emit)
-        self.tbl_daq = self._make_watch_view(self._daq_model)
-        self.btn_daq_fold = self._make_fold_button(self.tbl_daq)
         ctrl.addWidget(self.btn_daq_start)
         ctrl.addWidget(self.btn_daq_stop)
         ctrl.addWidget(self.btn_daq_write)
-        ctrl.addWidget(self.btn_daq_curves)
-        ctrl.addWidget(self.btn_daq_export)
-        ctrl.addWidget(btn_remove)
-        ctrl.addWidget(btn_clear)
-        ctrl.addWidget(self.btn_daq_fold)
+
+        self.tbl_daq = self._make_watch_view(self._daq_model)
+        act_curves = QAction("Graphic", self)
+        act_curves.triggered.connect(self.daq_curves.emit)
+        act_export = QAction("Export CSV", self)
+        act_export.setToolTip("Export buffered DAQ samples to a CSV file.")
+        act_export.triggered.connect(self.daq_export.emit)
+        act_remove = QAction("Remove", self)
+        act_remove.triggered.connect(self.daq_remove.emit)
+        act_clear = QAction("Clear", self)
+        act_clear.triggered.connect(self.daq_clear.emit)
+        self.act_daq_fold = self._make_fold_action(self.tbl_daq)
+        menu = QMenu(self)
+        menu.addAction(act_curves)
+        menu.addAction(act_export)
+        menu.addSeparator()
+        menu.addAction(act_remove)
+        menu.addAction(act_clear)
+        menu.addSeparator()
+        menu.addAction(self.act_daq_fold)
+        ctrl.addWidget(self._actions_button(menu))
         ctrl.addStretch()
         layout.addLayout(ctrl)
         layout.addWidget(self.tbl_daq, stretch=1)
@@ -182,28 +205,28 @@ class WatchTabs(QTabWidget):
         model.modelReset.connect(lambda v=view, m=model: self._after_watch_reset(v, m))
         return view
 
-    def _make_fold_button(self, view: QTreeView) -> QPushButton:
-        btn = QPushButton("Fold all")
-        btn.setToolTip("Collapse every tag. Click again to expand them.")
-        btn.clicked.connect(lambda _checked=False, v=view: self._toggle_fold(v))
-        self._fold_btns[view] = btn
+    def _make_fold_action(self, view: QTreeView) -> QAction:
+        act = QAction("Fold all", self)
+        act.setToolTip("Collapse every tag. Click again to expand them.")
+        act.triggered.connect(lambda _checked=False, v=view: self._toggle_fold(v))
+        self._fold_acts[view] = act
         self._folded[view] = False
-        return btn
+        return act
 
     def _toggle_fold(self, view: QTreeView) -> None:
         self._folded[view] = not self._folded.get(view, False)
         self._apply_fold(view)
 
     def _apply_fold(self, view: QTreeView) -> None:
-        btn = self._fold_btns.get(view)
+        act = self._fold_acts.get(view)
         if self._folded.get(view, False):
             view.collapseAll()
-            if btn is not None:
-                btn.setText("Expand all")
+            if act is not None:
+                act.setText("Expand all")
         else:
             view.expandAll()
-            if btn is not None:
-                btn.setText("Fold all")
+            if act is not None:
+                act.setText("Fold all")
 
     def _after_watch_reset(self, view: QTreeView, model) -> None:
         for row in range(model.rowCount()):

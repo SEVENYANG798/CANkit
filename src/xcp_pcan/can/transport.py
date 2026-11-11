@@ -239,6 +239,8 @@ class CanBusTransport:
         self._stop = threading.Event()
         self._listeners: list[Callable[[CanFrame], None]] = []
         self._lock = threading.Lock()
+        # Separate from listener lock — send() must not nest with _notify_listeners.
+        self._tx_lock = threading.Lock()
         self._fd = False
         self._backend = HardwareBackend.PCAN
         self._last_open: dict | None = None
@@ -411,12 +413,13 @@ class CanBusTransport:
         if self._rx_thread is not None:
             self._rx_thread.join(timeout=2.0)
             self._rx_thread = None
-        if self._bus is not None:
-            try:
-                self._bus.shutdown()
-            except Exception:  # noqa: BLE001
-                logger.exception("Error shutting down CAN bus")
-            self._bus = None
+        with self._tx_lock:
+            if self._bus is not None:
+                try:
+                    self._bus.shutdown()
+                except Exception:  # noqa: BLE001
+                    logger.exception("Error shutting down CAN bus")
+                self._bus = None
         self._fd = False
         logger.info("Bus closed (%s)", self._backend.value)
 
@@ -457,11 +460,16 @@ class CanBusTransport:
             is_fd=use_fd,
             bitrate_switch=brs if use_fd else False,
         )
-        # Bound wait — bus-off / no-ACK must not freeze the GUI thread.
-        try:
-            self._bus.send(msg, timeout=0.5)
-        except TypeError:
-            self._bus.send(msg)
+        # Serialize TX across GUI timers / ISO-TP / XCP / TesterPresent.
+        with self._tx_lock:
+            bus = self._bus
+            if bus is None:
+                raise RuntimeError("CAN bus is not open")
+            # Bound wait — bus-off / no-ACK must not freeze the GUI thread.
+            try:
+                bus.send(msg, timeout=0.5)
+            except TypeError:
+                bus.send(msg)
         logger.debug(
             "TX id=0x%X%s fd=%s brs=%s data=%s",
             arbitration_id,

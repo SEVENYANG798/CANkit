@@ -272,6 +272,7 @@ class DiagConsoleDialog(QDialog):
         *,
         transport: CanBusTransport | None = None,
         on_connect: Callable[[], None] | None = None,
+        host: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Diagnostic Console")
@@ -280,6 +281,8 @@ class DiagConsoleDialog(QDialog):
         self._settings = settings
         self._transport = transport
         self._on_connect = on_connect
+        # configure_tool_window clears Qt parent — keep MainWindow for connection/_daq.
+        self._host = host
         self._pending_after_connect: str | None = None  # "execute" | "tp"
         self._thread: QThread | None = None
         self._worker: _DiagWorker | None = None
@@ -1498,8 +1501,8 @@ class DiagConsoleDialog(QDialog):
             QMessageBox.warning(self, self.windowTitle(), str(exc))
             return
         if self._uds_rx_overlaps_xcp_slave():
-            parent = self.parent()
-            daq = getattr(parent, "_daq", None) if parent is not None else None
+            host = self._host
+            daq = getattr(host, "_daq", None) if host is not None else None
             if daq is not None and getattr(daq, "is_running", False):
                 QMessageBox.warning(
                     self,
@@ -1515,9 +1518,12 @@ class DiagConsoleDialog(QDialog):
         self.persist_settings()
         self._start_request(payload)
 
+    def set_host(self, host: QWidget | None) -> None:
+        self._host = host
+
     def _uds_rx_overlaps_xcp_slave(self) -> bool:
-        parent = self.parent()
-        connection = getattr(parent, "connection", None) if parent is not None else None
+        host = self._host
+        connection = getattr(host, "connection", None) if host is not None else None
         if connection is None:
             return False
         try:
@@ -1540,7 +1546,7 @@ class DiagConsoleDialog(QDialog):
         worker = _DiagWorker(self._transport, cfg, payload)  # type: ignore[arg-type]
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.event.connect(self._append_event)
+        worker.event.connect(self._append_event, Qt.ConnectionType.QueuedConnection)
         worker.finished_ok.connect(self._on_ok)
         worker.finished_err.connect(self._on_err)
         worker.finished_ok.connect(thread.quit)

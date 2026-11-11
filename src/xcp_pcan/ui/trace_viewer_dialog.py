@@ -491,7 +491,7 @@ class TraceViewerDialog(QWidget):
 
     def sync_toolbar_actions(self, *, bus_open: bool, busy: bool = False) -> None:
         """Enable connect / disconnect / monitor icons from main-window link state."""
-        self.btn_tb_connect.setEnabled(not busy)
+        self.btn_tb_connect.setEnabled(not busy and not bus_open)
         # Only when bus is open — already disconnected stays grey / unclickable.
         self.btn_tb_disconnect.setEnabled(bool(bus_open) and not busy)
         live = self._live
@@ -702,12 +702,12 @@ class TraceViewerDialog(QWidget):
 
     def _on_table_context_menu(self, pos: QPoint) -> None:
         menu = QMenu(self)
-        act_clear = menu.addAction("清除日志")
-        act_save_all = menu.addAction("保存全部日志")
-        act_save_all.setToolTip("Save the whole buffer as ASC / BLF / CSV.")
-        act_save_sel = menu.addAction("保存选中日志")
+        act_clear = menu.addAction("Clear")
+        act_save_all = menu.addAction("Export all")
+        act_save_all.setToolTip("Export the whole buffer as ASC / BLF / CSV.")
+        act_save_sel = menu.addAction("Export selected")
         act_save_sel.setToolTip(
-            "Save selected rows (Ctrl+click / Shift+click). ASC / BLF / CSV."
+            "Export selected rows (Ctrl+click / Shift+click). ASC / BLF / CSV."
         )
         sel_n = len(self._table.selectionModel().selectedRows())
         act_save_sel.setEnabled(sel_n > 0)
@@ -742,7 +742,7 @@ class TraceViewerDialog(QWidget):
         return out
 
     def _save(self, *, selected_only: bool = False) -> None:
-        # Flush pending live frames so Save matches what is on screen.
+        # Flush pending live frames so Export matches what is on screen.
         if self._pending_live:
             self._flush_live_frames()
         if selected_only:
@@ -752,7 +752,7 @@ class TraceViewerDialog(QWidget):
                     self,
                     self._title(),
                     "No rows selected.\n"
-                    "Use Ctrl+click or Shift+click to select, then 保存选中日志.",
+                    "Use Ctrl+click or Shift+click to select, then Export selected.",
                 )
                 return
         else:
@@ -761,7 +761,7 @@ class TraceViewerDialog(QWidget):
                 QMessageBox.information(
                     self,
                     self._title(),
-                    "No frames to save. Start Monitor or Open a trace first.",
+                    "No frames to export. Start Monitor or Open a trace first.",
                 )
                 return
         start = self._settings.value("trace_viewer/save_dir", "", str)
@@ -769,7 +769,7 @@ class TraceViewerDialog(QWidget):
             start = self._settings.value("trace_viewer/dir", "", str)
         path, selected = QFileDialog.getSaveFileName(
             self,
-            "Save selected trace" if selected_only else "Save trace",
+            "Export selected trace" if selected_only else "Export trace",
             start,
             "ASC (*.asc);;BLF (*.blf);;CSV (*.csv);;All (*.*)",
         )
@@ -794,7 +794,7 @@ class TraceViewerDialog(QWidget):
             n = save_trace(path, frames, fmt=fmt)
         except Exception as exc:  # noqa: BLE001 — show path + reason in UI
             QApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, self._title(), f"Failed to save:\n{exc}")
+            QMessageBox.critical(self, self._title(), f"Failed to export:\n{exc}")
             return
         QApplication.restoreOverrideCursor()
         self._settings.setValue("trace_viewer/save_dir", str(Path(path).parent))
