@@ -16,8 +16,8 @@ from xcp_pcan.project import (
 from xcp_pcan.symbols.symbol_lists import load_symbol_list_dir
 from xcp_pcan.ui.diag_console_dialog import DiagConsoleDialog
 from xcp_pcan.ui.help_dialog import HelpDialog
-from xcp_pcan.ui.trace_viewer_dialog import TraceViewerDialog
 from xcp_pcan.ui.window_util import raise_window
+from xcp_pcan.ui.xcp_viewer_dialog import XcpViewerDialog
 
 
 class ProjectMixin:
@@ -173,20 +173,10 @@ class ProjectMixin:
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Save failed", str(exc))
 
-    def _open_trace_viewer(self) -> None:
-        if self._trace_viewer is None:
-            self._trace_viewer = TraceViewerDialog(
-                self._settings,
-                self,
-                transport=self._transport,
-                on_connect=lambda: self._connect(keep_front=self._trace_viewer),
-            )
-        else:
-            self._trace_viewer.set_transport(self._transport)
-            self._trace_viewer.set_on_connect(
-                lambda: self._connect(keep_front=self._trace_viewer)
-            )
-        raise_window(self._trace_viewer)
+    def _open_xcp_viewer(self) -> None:
+        if self._xcp_viewer is None:
+            self._xcp_viewer = XcpViewerDialog(self._mid, self._settings, self)
+        raise_window(self._xcp_viewer)
 
     def _open_diag_console(self) -> None:
         if self._diag_console is None:

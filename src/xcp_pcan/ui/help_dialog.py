@@ -16,25 +16,25 @@ HELP_HTML = """
 <ul>
 <li><b>Project</b>：Open / Save / Save as。</li>
 <li><b>Data Editor</b>：Load A2L/ELF、Resolve addresses from ELF、Update A2L from ELF、Create A2L from ELF。</li>
-<li><b>Trace Viewer</b>：离线日志与在线 Monitor / 发报文。</li>
+<li><b>XCP Viewer</b>：符号列表与 Polling / DAQ 观测（弹窗）。</li>
 <li><b>Diagnostic Console</b>：UDS over ISO-TP（会话、DID、安全访问、例程、刷写模板等）。</li>
+<li>主界面为 <b>Trace</b>（离线日志 / 在线 Monitor / 发报文）与底部 Log。</li>
 </ul>
 
 <h3>2. 连接（主窗口）</h3>
 <ul>
+<li><b>CAN → Connect</b> 打开配置对话框（标签：CAN Setup / Session / Security），确认后打开总线。
+<b>CAN → Disconnect</b> 关闭总线。快捷键 Ctrl+B / Ctrl+D。
+同菜单下还有 Trace：Log Replay、Start/Stop Monitor、Load/Remove DBC、Graphic、Reset filters、Collapse by ID、Auto-scroll、Detail。
+主界面搜索框左侧有 Connect / Disconnect / Start / Pause / Stop 快捷图标。</li>
 <li><b>Hardware</b>：PCAN 或 Vector。Vector 用 ↻ 刷新设备；未检测到时显示 Not detected，通道回退为 Channel 0–3。</li>
 <li><b>Nom bitrate / CAN FD / Data</b>：须与总线一致。FD 总线上开 Classic 只会看到错误帧。</li>
 <li><b>Master TX ID / Slave RX ID</b>：仅用于 XCP，始终手工填写，不会被 A2L 覆盖。</li>
-<li><b>Connect</b> 只打开 CAN 总线（即可用 Trace Monitor、Transmit、Diagnostic Console）。
+<li>Connect 只打开 CAN 总线（即可用 Trace Monitor、Transmit、Diagnostic Console）。
 <b>Start poll / Start DAQ</b> 时才做 XCP 握手。同一通道上不要再开第二个 XCP 主站。</li>
 <li>Trace / Diag 窗口里也可点 Connect；进度与提示会留在该窗口，不会抢主窗口焦点。</li>
-<li><b>Advanced</b>（默认收起）：
-<ul>
-<li><b>Bus / timing</b>：PCAN FD f_clock、CTO timeout / retries / retry delay（Vector 应用名固定为 CANkit）。</li>
-<li><b>Session resilience</b>：自动重连、重连次数与退避、DAQ DTO 静默超时后重建列表。</li>
-<li><b>Security &amp; Cal page</b>：Seed&amp;Key（.py 或 DLL）、Unlock resources、自动 SET_CAL_PAGE、Unlock now / SET / GET_CAL_PAGE。</li>
-</ul>
-</li>
+<li><b>Session</b>：PCAN FD f_clock、CTO timeout / retries、自动重连、DAQ DTO 静默超时。</li>
+<li><b>Security</b>：Seed&amp;Key、Unlock resources、自动 SET_CAL_PAGE、Unlock now / SET / GET_CAL_PAGE（已连接时可再打开对话框操作）。</li>
 </ul>
 
 <h3>3. Data Editor 与符号区</h3>

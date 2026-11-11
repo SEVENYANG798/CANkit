@@ -44,11 +44,47 @@ class ConnectMixin:
         _ = xcp  # tracked for status; Poll/DAQ/write ensure XCP when clicked
         self.connection.set_connected(bus_open)
         self.security.set_connected(bus_open)
+        busy = self._connect_busy()
+        self._act_can_connect.setEnabled(not busy)
+        self._act_can_disconnect.setEnabled(bus_open or busy)
+        if self._trace_viewer is not None:
+            self._trace_viewer.sync_toolbar_actions(
+                bus_open=bus_open, busy=busy
+            )
         self.watch.set_connected(
             bus_open,
             poll_running=self._poller.is_running,
             daq_running=self._daq.is_running,
         )
+
+    @Slot()
+    def _open_connect_dialog(self) -> None:
+        """CAN → Connect... — configure tabs, then open the bus (if not already)."""
+        from PySide6.QtCore import QTimer
+
+        from xcp_pcan.ui.connect_dialog import ConnectDialog
+
+        if self._connect_busy():
+            return
+        if getattr(self, "_connect_dialog_open", False):
+            return
+        bus_open = self._transport.is_open
+        # Defer past InstantPopup menu teardown so the dialog does not flash away.
+        def _show() -> None:
+            if getattr(self, "_connect_dialog_open", False):
+                return
+            self._connect_dialog_open = True
+            try:
+                dlg = ConnectDialog(self.connection, bus_open=bus_open, parent=self)
+                dlg.exec()
+                self.connection.setParent(self)
+                self.connection.hide()
+                if dlg.should_connect:
+                    self._connect()
+            finally:
+                self._connect_dialog_open = False
+
+        QTimer.singleShot(0, _show)
 
     def _rebuild_session_helpers(self) -> None:
         res = self.connection.collect_resilience()

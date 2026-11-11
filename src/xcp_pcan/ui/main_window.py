@@ -48,6 +48,7 @@ from xcp_pcan.ui.mw_symbols import SymbolToolsMixin
 from xcp_pcan.ui.security_panel import SecurityPanel
 from xcp_pcan.ui.symbol_panel import SymbolPanel
 from xcp_pcan.ui.trace_buffer import TraceBuffer
+from xcp_pcan.ui.trace_viewer_dialog import TraceViewerDialog
 from xcp_pcan.ui.watch_tabs import WatchTabs
 from xcp_pcan.ui.worker_util import abort_qthread, abort_workers, close_progress
 from xcp_pcan.xcp.daq import DaqEngine
@@ -131,6 +132,7 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._connect_keep_front = None
         self._pending_after_xcp = None
         self._trace_viewer = None
+        self._xcp_viewer = None
         self._diag_console = None
         self._help_dialog = None
 
@@ -138,12 +140,16 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._install_log_handler()
         self._set_connected_ui(False)
         self._restore_last_project()
+        # After first paint + project restore, open Connect like CAN → Connect...
+        QTimer.singleShot(0, self._open_connect_dialog)
 
     # --- UI construction -------------------------------------------------------
 
     def _build_ui(self) -> None:
         toolbar = QToolBar("Main")
         toolbar.setMovable(False)
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setStyleSheet("QToolBar { spacing: 2px; padding: 0px; margin: 0px; }")
         self.addToolBar(toolbar)
 
         project_menu = QMenu(self)
@@ -162,6 +168,24 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         btn_project.setMenu(project_menu)
         btn_project.setToolTip("Open, save, or save the project as")
         toolbar.addWidget(btn_project)
+
+        self._can_menu = QMenu(self)
+        self._act_can_connect = QAction("Connect", self)
+        self._act_can_connect.setShortcut(QKeySequence("Ctrl+B"))
+        self._act_can_connect.setToolTip("Configure hardware / XCP and open the CAN bus")
+        self._act_can_connect.triggered.connect(self._open_connect_dialog)
+        self._act_can_disconnect = QAction("Disconnect", self)
+        self._act_can_disconnect.setShortcut(QKeySequence("Ctrl+D"))
+        self._act_can_disconnect.setToolTip("Close the CAN bus")
+        self._act_can_disconnect.triggered.connect(self._disconnect)
+        self._can_menu.addAction(self._act_can_connect)
+        self._can_menu.addAction(self._act_can_disconnect)
+        btn_can = QToolButton()
+        btn_can.setText("CAN")
+        btn_can.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn_can.setMenu(self._can_menu)
+        btn_can.setToolTip("CAN bus connect and Trace tools")
+        toolbar.addWidget(btn_can)
         toolbar.addSeparator()
 
         self._act_load_symbols = QAction("Load A2L/ELF", self)
@@ -197,12 +221,12 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         toolbar.addWidget(btn_data)
         toolbar.addSeparator()
 
-        self._act_trace = QAction("Trace Viewer", self)
-        self._act_trace.setToolTip(
-            "Offline ASC/BLF/CSV and live CAN bus observation (DBC decode optional)."
+        self._act_xcp_viewer = QAction("XCP Viewer", self)
+        self._act_xcp_viewer.setToolTip(
+            "Symbols list and Polling / DAQ watch (measurement & calibration)."
         )
-        self._act_trace.triggered.connect(self._open_trace_viewer)
-        toolbar.addAction(self._act_trace)
+        self._act_xcp_viewer.triggered.connect(self._open_xcp_viewer)
+        toolbar.addAction(self._act_xcp_viewer)
         self._act_diag = QAction("Diagnostic Console", self)
         self._act_diag.setToolTip(
             "UDS over ISO-TP (e.g. 0x22 Read DID / 0x2E Write DID) on the open CAN bus."
@@ -228,57 +252,36 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        self.connection = ConnectionPanel()
-        self.connection.connect_clicked.connect(self._connect)
-        self.connection.disconnect_clicked.connect(self._disconnect)
+        # Owned off-layout; shown inside Connect dialog (CAN → Connect...).
+        self.connection = ConnectionPanel(self)
+        self.connection.hide()
         self.security = SecurityPanel()
         self.security.unlock_clicked.connect(self._unlock_now)
         self.security.set_cal_page_clicked.connect(self._apply_cal_page)
         self.security.get_cal_page_clicked.connect(self._query_cal_page)
         self.connection.advanced_extra.addWidget(self.security)
-        adv_open = self._settings.value("ui_advanced_open", False, type=bool)
-        self.connection.advanced.set_expanded(bool(adv_open))
-        self.connection.advanced.toggled.connect(
-            lambda open_: self._settings.setValue("ui_advanced_open", open_)
-        )
-        # After Security is attached + Advanced maybe expanded, remeasure scroll
-        # on the next event-loop tick (sizeHint is wrong while collapsed/hidden).
-        QTimer.singleShot(0, self.connection.sync_advanced_scroll_height)
-        self.connection.setTitle("")
-        self.connection.setFlat(True)
-        # Scope to this widget only — a bare "QGroupBox {…}" stylesheet cascades
-        # to Bus/timing / Session / Security and collapses their title margins.
-        self.connection.setObjectName("connectionPanel")
-        self.connection.setStyleSheet(
-            "#connectionPanel {"
-            " border: none;"
-            " background: transparent;"
-            " margin-top: 0px;"
-            "}"
-        )
-        self._fold_connection = CollapsibleSection(
-            "Connection",
-            expanded=self._settings.value("ui_connection_open", True, type=bool),
-            indent=0,
-            framed=True,
-        )
-        self._fold_connection.add_widget(self.connection)
-        self._fold_connection.toggled.connect(
-            lambda open_: self._settings.setValue("ui_connection_open", open_)
-        )
-        # Minimum: do not let a short window vertically crush Connection/Advanced
-        # rows (Maximum policy would shrink below sizeHint and squash controls).
-        self._fold_connection.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
-        )
-        # Outside the mid|log splitter: expands by a bounded Advanced scroll area
-        # only, so Symbols/Watch are never covered.
-        root.addWidget(self._fold_connection)
 
         self._splitter = QSplitter(Qt.Orientation.Vertical)
-        self._mid = QSplitter(Qt.Orientation.Horizontal)
 
+        # Trace is the main workspace; Symbols/DAQ live in XCP Viewer tool window.
+        self._trace_viewer = TraceViewerDialog(
+            self._settings,
+            self,
+            transport=self._transport,
+            on_connect=self._connect,
+            on_disconnect=self._disconnect,
+        )
+        self._trace_viewer.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._can_menu.addSeparator()
+        for act in self._trace_viewer.menu_actions():
+            self._can_menu.addAction(act)
+
+        self._mid = QSplitter(Qt.Orientation.Horizontal)
         self.symbols = SymbolPanel(self._symbol_model)
         self.symbols.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -327,14 +330,14 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         )
 
         self._fold_log = self._build_log_panel()
-        self._splitter.addWidget(self._mid)
+        self._splitter.addWidget(self._trace_viewer)
         self._splitter.addWidget(self._fold_log)
         self._configure_splitter(
             self._splitter,
             stretch=(5, 1),
             default_sizes=[620, 160],
-            # v2: 2-pane (mid|log); ignore older 3-pane Connection|mid|log state
-            settings_key="ui_main_splitter_v2",
+            # v3: Trace|log (XCP Viewer is a separate tool window)
+            settings_key="ui_main_splitter_v3",
         )
         root.addWidget(self._splitter, stretch=1)
 
@@ -553,7 +556,7 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
     def _close_tool_windows(self) -> None:
         """Tool windows are top-level (no transient parent); close them with the app."""
         for attr in (
-            "_trace_viewer",
+            "_xcp_viewer",
             "_diag_console",
             "_help_dialog",
             "_poll_chart",
@@ -573,6 +576,11 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._stop_poll()
         self._stop_daq()
         self._abort_background_jobs()
+        if self._trace_viewer is not None:
+            try:
+                self._trace_viewer.persist_settings()
+            except Exception:  # noqa: BLE001
+                logger.debug("Trace persist failed", exc_info=True)
         self._close_tool_windows()
         if self._log_handler is not None:
             logging.getLogger("xcp_pcan").removeHandler(self._log_handler)

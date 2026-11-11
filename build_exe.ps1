@@ -13,6 +13,7 @@ $WorkRoot = Join-Path $Root ".pyinstaller"
 $DistDir = Join-Path $WorkRoot "dist"
 $BuildDir = Join-Path $WorkRoot "build"
 $Entry = Join-Path $Root "src\xcp_pcan\__main__.py"
+$AppIcon = Join-Path $Root "src\xcp_pcan\resources\cankit.ico"
 
 function Write-Step([string]$Message) {
     Write-Host ""
@@ -39,6 +40,9 @@ function Remove-TreeIfExists([string]$Path) {
 
 if (-not (Test-Path -LiteralPath $Entry)) {
     throw "Entry not found: $Entry"
+}
+if (-not (Test-Path -LiteralPath $AppIcon)) {
+    throw "App icon not found: $AppIcon"
 }
 
 $Python = Find-Python
@@ -67,6 +71,9 @@ $pyArgs = @(
     "--workpath", $BuildDir,
     "--distpath", $DistDir,
     "--specpath", $WorkRoot,
+    "--icon", $AppIcon,
+    "--add-data", ($AppIcon + ";xcp_pcan/resources"),
+    "--add-data", ((Join-Path $Root "src\xcp_pcan\resources\cankit.png") + ";xcp_pcan/resources"),
     # Rely on PyInstaller PySide6 hooks (QtWidgets/Gui/Core) — avoid --collect-all bloat
     "--hidden-import", "PySide6.QtCore",
     "--hidden-import", "PySide6.QtGui",
@@ -120,8 +127,39 @@ if (-not (Test-Path -LiteralPath $BuiltExe)) {
 }
 
 $OutExe = Join-Path $OutputDir "$AppName.exe"
-Write-Step "Copying exe → $OutExe"
-Copy-Item -LiteralPath $BuiltExe -Destination $OutExe -Force
+# Overwriting the same path keeps Explorer's cached (often default) icon.
+# Write to a new file identity, then rename into place and notify the shell.
+Write-Step "Installing exe → $OutExe (cache-busting replace)"
+$StagingExe = Join-Path $OutputDir ("{0}.__new__.exe" -f $AppName)
+Copy-Item -LiteralPath $BuiltExe -Destination $StagingExe -Force
+if (Test-Path -LiteralPath $OutExe) {
+    Remove-Item -LiteralPath $OutExe -Force
+}
+Rename-Item -LiteralPath $StagingExe -NewName "$AppName.exe"
+
+# Ask Explorer/Q-Dir to drop the stale icon for this path.
+$shellNotify = @"
+using System;
+using System.Runtime.InteropServices;
+public static class ShellNotify {
+  [DllImport("shell32.dll")] public static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
+  public const int SHCNE_ASSOCCHANGED = 0x08000000;
+  public const int SHCNE_UPDATEITEM = 0x00002000;
+  public const uint SHCNF_PATHW = 0x0005;
+  public const uint SHCNF_FLUSH = 0x1000;
+}
+"@
+try {
+    Add-Type -TypeDefinition $shellNotify -ErrorAction SilentlyContinue | Out-Null
+    $bytes = [System.Text.Encoding]::Unicode.GetBytes($OutExe + [char]0)
+    $ptr = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
+    [System.Runtime.InteropServices.Marshal]::Copy($bytes, 0, $ptr, $bytes.Length)
+    [ShellNotify]::SHChangeNotify([ShellNotify]::SHCNE_UPDATEITEM, [ShellNotify]::SHCNF_PATHW -bor [ShellNotify]::SHCNF_FLUSH, $ptr, [IntPtr]::Zero)
+    [ShellNotify]::SHChangeNotify([ShellNotify]::SHCNE_ASSOCCHANGED, [ShellNotify]::SHCNF_FLUSH, [IntPtr]::Zero, [IntPtr]::Zero)
+    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($ptr)
+} catch {
+    Write-Host "Shell icon notify skipped: $($_.Exception.Message)" -ForegroundColor Yellow
+}
 
 Write-Step "Removing pack intermediates (.pyinstaller)"
 Remove-TreeIfExists $WorkRoot
@@ -137,4 +175,5 @@ if (Test-Path -LiteralPath $spec) {
 $sizeMb = [math]::Round((Get-Item -LiteralPath $OutExe).Length / 1MB, 1)
 Write-Host ""
 Write-Host "Done: $OutExe ($sizeMb MB)" -ForegroundColor Green
+Write-Host "If Explorer still shows the old icon, press F5 or open CANkit_v2.exe once (same binary)."
 Write-Host "Double-click the exe on a PC without Python. PCAN/Vector drivers are still required."

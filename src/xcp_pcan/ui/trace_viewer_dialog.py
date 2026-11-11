@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QSettings, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QAction, QActionGroup, QFont
+from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QSettings, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -27,8 +27,10 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStyle,
     QTableView,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -43,7 +45,9 @@ from xcp_pcan.ui.trace_signal_plot_dialog import TraceSignalPlotDialog
 from xcp_pcan.ui.trace_tx_panel import TraceTxPanel
 from xcp_pcan.ui.trace_viewer_model import TraceViewerModel
 from xcp_pcan.ui.trace_viewer_worker import TraceLoadWorker
-from xcp_pcan.ui.window_util import configure_tool_window, raise_window
+from xcp_pcan.ui.window_util import raise_window
+
+logger = logging.getLogger(__name__)
 
 
 def _fmt_id(arb: int) -> str:
@@ -127,7 +131,9 @@ class IdFilterDialog(QDialog):
         return ids
 
 
-class TraceViewerDialog(QDialog):
+class TraceViewerDialog(QWidget):
+    """CAN Trace panel (embedded in the main window)."""
+
     def __init__(
         self,
         settings: QSettings,
@@ -135,14 +141,13 @@ class TraceViewerDialog(QDialog):
         *,
         transport: CanBusTransport | None = None,
         on_connect: Callable[[], None] | None = None,
+        on_disconnect: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Trace Viewer")
-        self.resize(1100, 640)
-        configure_tool_window(self)
         self._settings = settings
         self._transport = transport
         self._on_connect = on_connect
+        self._on_disconnect = on_disconnect
         self._pending_live_after_connect = False
         self._worker: TraceLoadWorker | None = None
         self._progress: QProgressDialog | None = None
@@ -151,6 +156,7 @@ class TraceViewerDialog(QDialog):
         self._signal_plot_dialog: TraceSignalPlotDialog | None = None
         self._load_cancelled = False
         self._live = False
+        self._live_paused = False
         self._live_t0: float | None = None
         self._live_index = 0
         self._auto_scroll = True
@@ -211,61 +217,101 @@ class TraceViewerDialog(QDialog):
         self._text_filter_timer.timeout.connect(self._apply_text_filter)
         self.edt_text.textChanged.connect(self._on_text_filter_edited)
         self.edt_text.returnPressed.connect(self._apply_text_filter_now)
-        self.chk_scroll = QCheckBox("Auto-scroll")
-        self.chk_scroll.setChecked(True)
-        self.chk_scroll.toggled.connect(self._on_auto_scroll_toggled)
-        self.chk_detail = QCheckBox("Detail")
-        self.chk_detail.setToolTip(
-            "Show a fixed panel under the table with the selected frame's "
-            "ID / data / ASCII and DBC signal decode (Load DBC first for signals)."
-        )
-        self.chk_detail.toggled.connect(self._on_detail_toggled)
-        self.btn_collapse = QPushButton("Collapse by ID")
-        self.btn_collapse.setCheckable(True)
-        self.btn_collapse.setToolTip(
-            "Collapsed: one row per CAN-ID (PCAN Receive style, latest data + cycle/count).\n"
-            "Expanded: chronological timeline log (PCAN Trace style)."
-        )
-        self.btn_collapse.toggled.connect(self._on_collapse_toggled)
-        self.lbl_status = QLabel(
-            "Open a file, or Start Monitor after Connect opens the CAN bus (XCP optional)."
-        )
         self.lbl_dbc = QLabel("DBC: (none)")
+        self.lbl_dbc.setStyleSheet("color:#616161;")
 
-        btn_open = QPushButton("Open")
-        btn_open.clicked.connect(self._open)
-        btn_dbc = QPushButton("Load DBC")
-        btn_dbc.setToolTip("Load a .dbc to decode signals for the selected frame.")
-        btn_dbc.clicked.connect(self._load_dbc)
-        btn_dbc_clear = QPushButton("Clear DBC")
-        btn_dbc_clear.clicked.connect(self._clear_dbc)
-        self.btn_signal_plot = QPushButton("Signal plot")
-        self.btn_signal_plot.setToolTip(
+        # Actions live under main CAN menu; Trace strip has shortcut icons + search.
+        self.act_open = QAction("Log Replay", self)
+        self.act_open.setToolTip("Open offline ASC / BLF / CSV")
+        self.act_open.triggered.connect(self._open)
+        self.act_live = QAction("Start Monitor", self)
+        self.act_live.setToolTip(
+            "Observe RX/TX on the open CAN bus. Connect opens the bus; XCP is not required."
+        )
+        self.act_live.triggered.connect(self._toggle_live)
+        self.act_load_dbc = QAction("Load DBC", self)
+        self.act_load_dbc.setToolTip("Load a .dbc to decode signals for the selected frame.")
+        self.act_load_dbc.triggered.connect(self._load_dbc)
+        self.act_clear_dbc = QAction("Remove DBC", self)
+        self.act_clear_dbc.triggered.connect(self._clear_dbc)
+        self.act_signal_plot = QAction("Graphic", self)
+        self.act_signal_plot.setToolTip(
             "Pick a DBC signal and plot / list its values over the current Trace "
             "(offline log or captured Monitor buffer). Requires Load DBC."
         )
-        self.btn_signal_plot.clicked.connect(self._open_signal_plot)
-        self.btn_signal_plot.setEnabled(False)
-        self.btn_live = QPushButton("Start Monitor")
-        self.btn_live.setToolTip(
-            "Observe RX/TX on the open CAN bus. Connect opens the bus; XCP is not required."
+        self.act_signal_plot.triggered.connect(self._open_signal_plot)
+        self.act_signal_plot.setEnabled(False)
+        self.act_reset_filters = QAction("Reset filters", self)
+        self.act_reset_filters.setToolTip("Clear text, ID▾ and Dir▾ filters.")
+        self.act_reset_filters.triggered.connect(self._clear_filter)
+        self.act_collapse = QAction("Collapse by ID", self)
+        self.act_collapse.setCheckable(True)
+        self.act_collapse.setToolTip(
+            "Collapsed: one row per CAN-ID (PCAN Receive style, latest data + cycle/count).\n"
+            "Expanded: chronological timeline log (PCAN Trace style)."
         )
-        self.btn_live.clicked.connect(self._toggle_live)
-        btn_reset_f = QPushButton("Reset filters")
-        btn_reset_f.setToolTip("Clear text, ID▾ and Dir▾ filters.")
-        btn_reset_f.clicked.connect(self._clear_filter)
+        self.act_collapse.toggled.connect(self._on_collapse_toggled)
+        self.act_auto_scroll = QAction("Auto-scroll", self)
+        self.act_auto_scroll.setCheckable(True)
+        self.act_auto_scroll.setChecked(True)
+        self.act_auto_scroll.toggled.connect(self._on_auto_scroll_toggled)
+        self.act_detail = QAction("Detail panel", self)
+        self.act_detail.setCheckable(True)
+        self.act_detail.setToolTip(
+            "Show a fixed panel under the table with the selected frame's "
+            "ID / data / ASCII and DBC signal decode (Load DBC first for signals)."
+        )
+        self.act_detail.toggled.connect(self._on_detail_toggled)
 
-        top = QHBoxLayout()
-        top.addWidget(btn_open)
-        top.addWidget(self.btn_live)
-        top.addWidget(btn_dbc)
-        top.addWidget(btn_dbc_clear)
-        top.addWidget(self.btn_signal_plot)
-        top.addWidget(self.edt_text, stretch=1)
-        top.addWidget(btn_reset_f)
-        top.addWidget(self.btn_collapse)
-        top.addWidget(self.chk_scroll)
-        top.addWidget(self.chk_detail)
+        style = self.style()
+        assert style is not None
+        self.btn_tb_connect = self._make_tool_button(
+            self._chain_link_icon(connected=True),
+            "Connect",
+            self._toolbar_connect,
+        )
+        self.btn_tb_disconnect = self._make_tool_button(
+            self._chain_link_icon(connected=False),
+            "Disconnect",
+            self._toolbar_disconnect,
+        )
+        self.btn_tb_start = self._make_tool_button(
+            style.standardIcon(QStyle.StandardPixmap.SP_MediaPlay),
+            "Start Monitor",
+            self._toolbar_start,
+        )
+        self.btn_tb_pause = self._make_tool_button(
+            style.standardIcon(QStyle.StandardPixmap.SP_MediaPause),
+            "Pause Monitor",
+            self._toolbar_pause,
+        )
+        self.btn_tb_stop = self._make_tool_button(
+            style.standardIcon(QStyle.StandardPixmap.SP_MediaStop),
+            "Stop Monitor",
+            self._toolbar_stop,
+        )
+        self.btn_tb_graphic = self._make_tool_button(
+            self._line_chart_icon(),
+            "Graphic",
+            self._open_signal_plot,
+        )
+        self.btn_tb_graphic.setEnabled(False)
+
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(2, 0, 4, 0)
+        filter_row.setSpacing(2)
+        for btn in (
+            self.btn_tb_connect,
+            self.btn_tb_disconnect,
+            self.btn_tb_start,
+            self.btn_tb_pause,
+            self.btn_tb_stop,
+            self.btn_tb_graphic,
+        ):
+            filter_row.addWidget(btn)
+        filter_row.addWidget(self.edt_text, stretch=1)
+        filter_row.addWidget(self.lbl_dbc)
+        self.sync_toolbar_actions(bus_open=False, busy=False)
 
         upper = QWidget()
         upper_lay = QVBoxLayout(upper)
@@ -289,12 +335,13 @@ class TraceViewerDialog(QDialog):
         self._splitter.setSizes([560, 120])
 
         root = QVBoxLayout(self)
-        root.addLayout(top)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(2)
+        root.addLayout(filter_row)
         root.addWidget(self._splitter, stretch=1)
-        status_row = QHBoxLayout()
-        status_row.addWidget(self.lbl_status, stretch=1)
-        status_row.addWidget(self.lbl_dbc)
-        root.addLayout(status_row)
+        self._status(
+            "Trace ready — Open a file, or Start Monitor after Connect opens the CAN bus."
+        )
 
         self._apply_column_widths()
         collapsed_raw = self._settings.value("trace_viewer/collapsed", False)
@@ -303,11 +350,11 @@ class TraceViewerDialog(QDialog):
         else:
             collapsed = bool(collapsed_raw)
         if collapsed:
-            self.btn_collapse.blockSignals(True)
-            self.btn_collapse.setChecked(True)
-            self.btn_collapse.blockSignals(False)
+            self.act_collapse.blockSignals(True)
+            self.act_collapse.setChecked(True)
+            self.act_collapse.blockSignals(False)
             self._model.set_collapsed(True)
-            self.btn_collapse.setText("Expand timeline")
+            self.act_collapse.setText("Expand timeline")
             self._apply_column_widths()
 
         # Defer last-DBC restore so the window can paint before cantools parses
@@ -333,6 +380,151 @@ class TraceViewerDialog(QDialog):
     def set_on_connect(self, on_connect: Callable[[], None] | None) -> None:
         self._on_connect = on_connect
 
+    def set_on_disconnect(self, on_disconnect: Callable[[], None] | None) -> None:
+        self._on_disconnect = on_disconnect
+
+    @staticmethod
+    def _make_tool_button(icon, tip: str, slot) -> QToolButton:
+        btn = QToolButton()
+        btn.setIcon(icon)
+        btn.setToolTip(tip)
+        btn.setAutoRaise(True)
+        btn.setFixedSize(28, 28)
+        btn.clicked.connect(slot)
+        return btn
+
+    @staticmethod
+    def _chain_link_icon(*, connected: bool, size: int = 20) -> QIcon:
+        """Connect=green links; Disconnect=red links+X (Disabled mode is grey)."""
+
+        def _paint(color: QColor, *, badge: bool, badge_fill: QColor) -> QPixmap:
+            pm = QPixmap(size, size)
+            pm.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pm)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            pen = QPen(color, 1.7)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            link = QRectF(-6.4, -3.1, 12.8, 6.2)
+            for cx, cy in ((7.2, 12.6), (12.8, 7.4)):
+                painter.save()
+                painter.translate(cx, cy)
+                painter.rotate(-42)
+                painter.drawRoundedRect(link, 3.1, 3.1)
+                painter.restore()
+            if badge:
+                cx = float(size) - 5.0
+                cy = float(size) - 5.0
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(badge_fill)
+                painter.drawEllipse(QPointF(cx, cy), 4.4, 4.4)
+                xpen = QPen(QColor("#FFFFFF"), 1.35)
+                xpen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                painter.setPen(xpen)
+                d = 2.1
+                painter.drawLine(QPointF(cx - d, cy - d), QPointF(cx + d, cy + d))
+                painter.drawLine(QPointF(cx + d, cy - d), QPointF(cx - d, cy + d))
+            painter.end()
+            return pm
+
+        icon = QIcon()
+        if connected:
+            icon.addPixmap(_paint(QColor("#2E7D32"), badge=False, badge_fill=QColor()), QIcon.Mode.Normal)
+            icon.addPixmap(_paint(QColor("#BDBDBD"), badge=False, badge_fill=QColor()), QIcon.Mode.Disabled)
+        else:
+            icon.addPixmap(
+                _paint(QColor("#C62828"), badge=True, badge_fill=QColor("#C62828")),
+                QIcon.Mode.Normal,
+            )
+            icon.addPixmap(
+                _paint(QColor("#BDBDBD"), badge=True, badge_fill=QColor("#9E9E9E")),
+                QIcon.Mode.Disabled,
+            )
+        return icon
+
+    @staticmethod
+    def _line_chart_icon(size: int = 20) -> QIcon:
+        """Simple polyline chart icon (closer to a signal plot than file/list icons)."""
+        pm = QPixmap(size, size)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        axis = QPen(QColor("#616161"), 1.2)
+        painter.setPen(axis)
+        painter.drawLine(3, size - 3, size - 2, size - 3)
+        painter.drawLine(3, 2, 3, size - 3)
+        line = QPen(QColor("#1565C0"), 1.6)
+        line.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        line.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(line)
+        pts = [
+            QPoint(4, size - 6),
+            QPoint(7, size - 11),
+            QPoint(10, size - 8),
+            QPoint(13, size - 14),
+            QPoint(16, size - 10),
+            QPoint(size - 3, 4),
+        ]
+        for a, b in zip(pts, pts[1:], strict=False):
+            painter.drawLine(a, b)
+        painter.end()
+        return QIcon(pm)
+
+    def sync_toolbar_actions(self, *, bus_open: bool, busy: bool = False) -> None:
+        """Enable connect / disconnect / monitor icons from main-window link state."""
+        self.btn_tb_connect.setEnabled(not busy)
+        # Only when bus is open — already disconnected stays grey / unclickable.
+        self.btn_tb_disconnect.setEnabled(bool(bus_open) and not busy)
+        live = self._live
+        paused = self._live_paused
+        self.btn_tb_start.setEnabled(not live or paused)
+        self.btn_tb_pause.setEnabled(live and not paused)
+        self.btn_tb_stop.setEnabled(live)
+
+    def _toolbar_connect(self) -> None:
+        if self._on_connect is not None:
+            self._on_connect()
+        else:
+            self._prompt_open_bus()
+
+    def _toolbar_disconnect(self) -> None:
+        if self._on_disconnect is not None:
+            self._on_disconnect()
+
+    def _toolbar_start(self) -> None:
+        if self._live and self._live_paused:
+            self._live_paused = False
+            self._status("Monitor resumed.")
+            self._sync_live_actions()
+            return
+        if not self._live:
+            self._start_live()
+
+    def _toolbar_pause(self) -> None:
+        if not self._live or self._live_paused:
+            return
+        self._live_paused = True
+        self._pending_live.clear()
+        self._status("Monitor paused.")
+        self._sync_live_actions()
+
+    def _toolbar_stop(self) -> None:
+        if self._live:
+            self._stop_live()
+            self._status("Monitor stopped.")
+
+    def _sync_live_actions(self) -> None:
+        if self._live and self._live_paused:
+            self.act_live.setText("Resume Monitor")
+        elif self._live:
+            self.act_live.setText("Stop Monitor")
+        else:
+            self.act_live.setText("Start Monitor")
+        bus_open = bool(self._transport is not None and self._transport.is_open)
+        self.sync_toolbar_actions(bus_open=bus_open)
+
     def set_transport(self, transport: CanBusTransport | None) -> None:
         if self._live:
             self._stop_live()
@@ -344,12 +536,26 @@ class TraceViewerDialog(QDialog):
         self._tx_panel.stop_all_cycles()
         if self._live:
             self._stop_live()
-            self.lbl_status.setText("Monitor stopped (CAN disconnected).")
+            self._status("Monitor stopped (CAN disconnected).")
 
     def persist_settings(self) -> None:
         self._tx_panel.save_to_settings(self._settings)
         self._settings.setValue("trace_viewer/splitter", self._splitter.sizes())
         self._settings.setValue("trace_viewer/collapsed", self._model.is_collapsed())
+
+    def menu_actions(self) -> list[QAction]:
+        """Actions for the main-window CAN menu (Trace tools)."""
+        return [
+            self.act_open,
+            self.act_live,
+            self.act_load_dbc,
+            self.act_clear_dbc,
+            self.act_signal_plot,
+            self.act_reset_filters,
+            self.act_collapse,
+            self.act_auto_scroll,
+            self.act_detail,
+        ]
 
     def _apply_column_widths(self) -> None:
         """Data stretches; other columns size to header text (PCAN-like default)."""
@@ -398,9 +604,9 @@ class TraceViewerDialog(QDialog):
         """Timeline (PCAN Trace style) should chase the latest frame."""
         if self._model.is_collapsed():
             return
-        if not self.chk_scroll.isChecked():
+        if not self.act_auto_scroll.isChecked():
             # setChecked fires toggled → _on_auto_scroll_toggled → scroll
-            self.chk_scroll.setChecked(True)
+            self.act_auto_scroll.setChecked(True)
             return
         self._scroll_trace_to_bottom()
 
@@ -427,7 +633,7 @@ class TraceViewerDialog(QDialog):
 
     def _on_collapse_toggled(self, collapsed: bool) -> None:
         self._model.set_collapsed(collapsed)
-        self.btn_collapse.setText("Expand timeline" if collapsed else "Collapse by ID")
+        self.act_collapse.setText("Expand timeline" if collapsed else "Collapse by ID")
         self._apply_column_widths()
         if not collapsed:
             self._ensure_timeline_auto_scroll()
@@ -568,7 +774,7 @@ class TraceViewerDialog(QDialog):
         QApplication.restoreOverrideCursor()
         self._settings.setValue("trace_viewer/save_dir", str(Path(path).parent))
         kind = "selected" if selected_only else "all"
-        self.lbl_status.setText(f"Saved {n} frames ({kind}) → {Path(path).name}")
+        self._status(f"Saved {n} frames ({kind}) → {Path(path).name}")
 
     def _restore_pending_dbc(self) -> None:
         path = getattr(self, "_pending_dbc_path", None)
@@ -602,7 +808,8 @@ class TraceViewerDialog(QDialog):
         self._dbc = None
         self._model.set_dbc_names(None)
         self.lbl_dbc.setText("DBC: (none)")
-        self.btn_signal_plot.setEnabled(False)
+        self.act_signal_plot.setEnabled(False)
+        self.btn_tb_graphic.setEnabled(False)
         self._settings.setValue("trace_viewer/dbc", "")
         self._apply_column_widths()
         self._refresh_status()
@@ -611,7 +818,7 @@ class TraceViewerDialog(QDialog):
     def _open_signal_plot(self) -> None:
         if self._dbc is None:
             QMessageBox.information(
-                self, self._title(), "Load a DBC first, then open Signal plot."
+                self, self._title(), "Load a DBC first, then open Graphic."
             )
             return
         # configure_tool_window() clears the Qt parent — must keep a Python ref
@@ -629,7 +836,8 @@ class TraceViewerDialog(QDialog):
         self._dbc = dbc
         self._model.set_dbc_names(dbc.message_names())
         self.lbl_dbc.setText(f"DBC: {Path(path).name} ({dbc.message_count} msgs)")
-        self.btn_signal_plot.setEnabled(True)
+        self.act_signal_plot.setEnabled(True)
+        self.btn_tb_graphic.setEnabled(True)
         if remember:
             self._settings.setValue("trace_viewer/dbc", path)
             self._settings.setValue("trace_viewer/dbc_dir", str(Path(path).parent))
@@ -645,12 +853,14 @@ class TraceViewerDialog(QDialog):
         self._live_index = 0
         self._live_t0 = None
         self._path = ""
-        self.lbl_status.setText("Cleared.")
+        self._status("Trace cleared.")
 
     def _toggle_live(self) -> None:
+        if self._live and self._live_paused:
+            self._toolbar_start()
+            return
         if self._live:
-            self._stop_live()
-            self.lbl_status.setText("Monitor stopped.")
+            self._toolbar_stop()
             return
         self._start_live()
 
@@ -704,9 +914,10 @@ class TraceViewerDialog(QDialog):
         self._pending_live.clear()
         self._live_dropped = 0
         self._live = True
+        self._live_paused = False
         self._transport.add_listener(self._on_can_frame)
-        self.btn_live.setText("Stop Monitor")
-        self.lbl_status.setText("Monitor: waiting for CAN frames…")
+        self._status("Monitor started — waiting for CAN frames…")
+        self._sync_live_actions()
         # Live timeline should open already following the newest frames.
         self._ensure_timeline_auto_scroll()
 
@@ -714,6 +925,7 @@ class TraceViewerDialog(QDialog):
         if not self._live:
             return
         self._live = False
+        self._live_paused = False
         self._live_flush.stop()
         self._pending_live.clear()
         self._live_dropped = 0
@@ -722,11 +934,11 @@ class TraceViewerDialog(QDialog):
                 self._transport.remove_listener(self._on_can_frame)
             except Exception:  # noqa: BLE001
                 pass
-        self.btn_live.setText("Start Monitor")
+        self._sync_live_actions()
 
     def _on_can_frame(self, frame: CanFrame) -> None:
         # Called from CAN RX thread — hop to GUI via queued signal.
-        if self._live:
+        if self._live and not self._live_paused:
             self._bridge.frame.emit(frame)
 
     @Slot(object)
@@ -805,7 +1017,7 @@ class TraceViewerDialog(QDialog):
         self._settings.setValue("trace_viewer/dir", str(Path(path).parent))
         self._model.clear()
         self._detail.clear()
-        self.lbl_status.setText(f"Loading {Path(path).name}…")
+        self._status(f"Loading {Path(path).name}…")
 
         progress = QProgressDialog("Loading trace…", "Cancel", 0, 0, self)
         progress.setWindowTitle(self._title())
@@ -857,11 +1069,11 @@ class TraceViewerDialog(QDialog):
             # Large timeline freezes the view; collapse-by-ID stays usable (PCAN Receive style).
             large = len(frames) >= 80_000
             if large and not self._model.is_collapsed():
-                self.btn_collapse.blockSignals(True)
-                self.btn_collapse.setChecked(True)
-                self.btn_collapse.blockSignals(False)
+                self.act_collapse.blockSignals(True)
+                self.act_collapse.setChecked(True)
+                self.act_collapse.blockSignals(False)
                 self._model.set_collapsed(True)
-                self.btn_collapse.setText("Expand timeline")
+                self.act_collapse.setText("Expand timeline")
             self._model.set_frames(frames)
             if self._dbc is not None:
                 self._model.set_dbc_names(self._dbc.message_names())
@@ -871,20 +1083,23 @@ class TraceViewerDialog(QDialog):
             else:
                 self._refresh_status()
             if large and self._model.is_collapsed():
-                self.lbl_status.setText(
-                    f"{self.lbl_status.text()} — large file opened collapsed"
+                self._status(
+                    f"Loaded {Path(self._path).name}: {len(frames)} frames "
+                    "(opened collapsed for performance)"
                 )
+            else:
+                self._status(f"Loaded {Path(self._path).name}: {len(frames)} frames")
         except Exception as exc:  # noqa: BLE001
             self._on_failed(f"Failed to display trace ({len(frames)} frames):\n{exc}")
 
     def _on_load_cancelled(self) -> None:
         self._load_cancelled = True
-        self.lbl_status.setText("Load cancelled.")
+        self._status("Load cancelled.")
 
     def _on_failed(self, message: str) -> None:
         if self._load_cancelled:
             return
-        self.lbl_status.setText("Load failed.")
+        self._status("Load failed.")
         QMessageBox.critical(self, self._title(), message)
 
     def _on_finished(self) -> None:
@@ -991,20 +1206,16 @@ class TraceViewerDialog(QDialog):
         self._model.set_text_filter(self.edt_text.text())
         self._refresh_status()
 
+    def _status(self, message: str) -> None:
+        """Trace events go to the main Log (via package logging handler)."""
+        text = (message or "").strip()
+        if not text:
+            return
+        logger.info("%s", text)
+
     def _refresh_status(self) -> None:
-        total = len(self._model.all_frames())
-        shown = self._model.rowCount()
+        """Was a footer label; now only logs bus-error / drop warnings once."""
         notes: list[str] = []
-        ids = self._model.id_filter()
-        if ids:
-            notes.append(f"{len(ids)} IDs")
-        direction = self._model.dir_filter()
-        if direction is True:
-            notes.append("RX")
-        elif direction is False:
-            notes.append("TX")
-        if self._model.errors_only():
-            notes.append("ERR")
         recent = self._model.all_frames()[-200:]
         recent_err = sum(1 for fr in recent if fr.is_error)
         if recent and recent_err * 2 >= len(recent):
@@ -1018,21 +1229,16 @@ class TraceViewerDialog(QDialog):
                 notes.append(f"bus errors {recent_err}/{len(recent)} — bitrate/wiring/ACK?")
         if self._live and self._live_dropped:
             notes.append(f"dropped {self._live_dropped} (UI overload)")
-        note = f" [{', '.join(notes)}]" if notes else ""
-        mode = "by ID" if self._model.is_collapsed() else "timeline"
-        if self._live:
-            self.lbl_status.setText(
-                f"Monitor ({mode}): showing {shown} / {total} frames{note}"
-            )
-        elif self._path:
-            self.lbl_status.setText(
-                f"{Path(self._path).name} ({mode}): showing {shown} / {total} frames{note}"
-            )
-        else:
-            self.lbl_status.setText(f"Showing ({mode}) {shown} / {total} frames{note}")
+        if not notes:
+            return
+        key = "|".join(notes)
+        if key == getattr(self, "_last_status_note", None):
+            return
+        self._last_status_note = key
+        self._status("; ".join(notes))
 
     def _on_selection(self, *_args) -> None:
-        if not self.chk_detail.isChecked():
+        if not self.act_detail.isChecked():
             return
         indexes = self._table.selectionModel().selectedRows()
         if not indexes:

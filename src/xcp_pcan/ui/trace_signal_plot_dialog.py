@@ -389,7 +389,7 @@ class TraceSignalPlotDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Signal plot")
+        self.setWindowTitle("Graphic")
         self.resize(900, 600)
         configure_tool_window(self)
         self._dbc = dbc
