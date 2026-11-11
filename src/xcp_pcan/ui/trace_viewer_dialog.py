@@ -266,12 +266,12 @@ class TraceViewerDialog(QWidget):
         style = self.style()
         assert style is not None
         self.btn_tb_connect = self._make_tool_button(
-            self._chain_link_icon(connected=True),
+            self._bus_plug_icon(connected=True),
             "Connect",
             self._toolbar_connect,
         )
         self.btn_tb_disconnect = self._make_tool_button(
-            self._chain_link_icon(connected=False),
+            self._bus_plug_icon(connected=False),
             "Disconnect",
             self._toolbar_disconnect,
         )
@@ -321,9 +321,9 @@ class TraceViewerDialog(QWidget):
 
         self._tx_panel = TraceTxPanel(transport_getter=lambda: self._transport, parent=self)
         self._tx_panel.restore_from_settings(self._settings)
-        # Toolbar + 2-row TX table; more rows scroll inside the panel.
-        self._tx_panel.setMinimumHeight(110)
-        self._tx_panel.setMaximumHeight(140)
+        # 2-row TX table (right-click Add/Remove); more rows scroll inside.
+        self._tx_panel.setMinimumHeight(86)
+        self._tx_panel.setMaximumHeight(102)
 
         self._splitter = QSplitter(Qt.Orientation.Vertical)
         self._splitter.addWidget(upper)
@@ -332,7 +332,7 @@ class TraceViewerDialog(QWidget):
         self._splitter.setStretchFactor(1, 0)
         self._splitter.setChildrenCollapsible(False)
         # Prefer a short Transmit strip; ignore older tall TX splitter sizes.
-        self._splitter.setSizes([560, 120])
+        self._splitter.setSizes([580, 90])
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -394,36 +394,47 @@ class TraceViewerDialog(QWidget):
         return btn
 
     @staticmethod
-    def _chain_link_icon(*, connected: bool, size: int = 20) -> QIcon:
-        """Connect=green links; Disconnect=red links+X (Disabled mode is grey)."""
+    def _bus_plug_icon(*, connected: bool, size: int = 20) -> QIcon:
+        """Side-view plug: green mated = Connect; red unplugged+X = Disconnect."""
 
-        def _paint(color: QColor, *, badge: bool, badge_fill: QColor) -> QPixmap:
+        def _paint(color: QColor, *, mated: bool, badge: bool, badge_fill: QColor) -> QPixmap:
             pm = QPixmap(size, size)
             pm.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pm)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            pen = QPen(color, 1.7)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            link = QRectF(-6.4, -3.1, 12.8, 6.2)
-            for cx, cy in ((7.2, 12.6), (12.8, 7.4)):
-                painter.save()
-                painter.translate(cx, cy)
-                painter.rotate(-42)
-                painter.drawRoundedRect(link, 3.1, 3.1)
-                painter.restore()
+            # Socket face (left vertical bar)
+            sock = QPen(color, 1.8)
+            sock.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(sock)
+            painter.drawLine(QPointF(3.0, 5.0), QPointF(3.0, 15.0))
+            painter.drawLine(QPointF(3.0, 5.0), QPointF(5.2, 5.0))
+            painter.drawLine(QPointF(3.0, 15.0), QPointF(5.2, 15.0))
+            # Prongs
+            prong = QPen(color, 1.7)
+            prong.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(prong)
+            if mated:
+                painter.drawLine(QPointF(4.2, 8.0), QPointF(10.0, 8.0))
+                painter.drawLine(QPointF(4.2, 12.0), QPointF(10.0, 12.0))
+                body_x = 9.5
+            else:
+                painter.drawLine(QPointF(7.0, 8.0), QPointF(11.2, 8.0))
+                painter.drawLine(QPointF(7.0, 12.0), QPointF(11.2, 12.0))
+                body_x = 10.8
+            # Plug body
+            painter.setPen(QPen(color, 1.3))
+            painter.setBrush(color)
+            painter.drawRoundedRect(QRectF(body_x, 5.5, 6.2, 9.0), 1.6, 1.6)
             if badge:
-                cx = float(size) - 5.0
-                cy = float(size) - 5.0
+                cx = float(size) - 4.8
+                cy = float(size) - 4.8
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(badge_fill)
-                painter.drawEllipse(QPointF(cx, cy), 4.4, 4.4)
-                xpen = QPen(QColor("#FFFFFF"), 1.35)
+                painter.drawEllipse(QPointF(cx, cy), 4.2, 4.2)
+                xpen = QPen(QColor("#FFFFFF"), 1.3)
                 xpen.setCapStyle(Qt.PenCapStyle.RoundCap)
                 painter.setPen(xpen)
-                d = 2.1
+                d = 2.0
                 painter.drawLine(QPointF(cx - d, cy - d), QPointF(cx + d, cy + d))
                 painter.drawLine(QPointF(cx + d, cy - d), QPointF(cx - d, cy + d))
             painter.end()
@@ -431,15 +442,21 @@ class TraceViewerDialog(QWidget):
 
         icon = QIcon()
         if connected:
-            icon.addPixmap(_paint(QColor("#2E7D32"), badge=False, badge_fill=QColor()), QIcon.Mode.Normal)
-            icon.addPixmap(_paint(QColor("#BDBDBD"), badge=False, badge_fill=QColor()), QIcon.Mode.Disabled)
-        else:
             icon.addPixmap(
-                _paint(QColor("#C62828"), badge=True, badge_fill=QColor("#C62828")),
+                _paint(QColor("#2E7D32"), mated=True, badge=False, badge_fill=QColor()),
                 QIcon.Mode.Normal,
             )
             icon.addPixmap(
-                _paint(QColor("#BDBDBD"), badge=True, badge_fill=QColor("#9E9E9E")),
+                _paint(QColor("#BDBDBD"), mated=True, badge=False, badge_fill=QColor()),
+                QIcon.Mode.Disabled,
+            )
+        else:
+            icon.addPixmap(
+                _paint(QColor("#C62828"), mated=False, badge=True, badge_fill=QColor("#C62828")),
+                QIcon.Mode.Normal,
+            )
+            icon.addPixmap(
+                _paint(QColor("#BDBDBD"), mated=False, badge=True, badge_fill=QColor("#9E9E9E")),
                 QIcon.Mode.Disabled,
             )
         return icon
@@ -570,11 +587,8 @@ class TraceViewerDialog(QWidget):
             self._table.setColumnHidden(col, False)
         self._table.setColumnHidden(name_col, not show_name)
         fm = self._table.fontMetrics()
-        longest_name = ""
-        if show_name:
-            for name in self._model.dbc_names().values():
-                if name and len(name) > len(longest_name):
-                    longest_name = name
+        # Fit names already seen in the buffer — not the longest name in the whole DBC.
+        longest_name = self._model.longest_appeared_dbc_name() if show_name else ""
         for col in range(self._model.columnCount()):
             if col == name_col and not show_name:
                 continue
@@ -591,9 +605,20 @@ class TraceViewerDialog(QWidget):
             if col == 0:
                 width = max(width, 40)
             if col == name_col and longest_name:
-                # Fit longest DBC message name so Name is not clipped to "PBM_0x…".
                 width = max(width, fm.horizontalAdvance(longest_name) + 28)
             self._table.setColumnWidth(col, width)
+
+    def _maybe_widen_name_column(self) -> None:
+        """Grow Name column when a longer appeared DBC name shows up (live / load)."""
+        name_col = self._model.name_column()
+        if self._table.isColumnHidden(name_col):
+            return
+        longest = self._model.longest_appeared_dbc_name()
+        if not longest:
+            return
+        need = self._table.fontMetrics().horizontalAdvance(longest) + 28
+        if need > self._table.columnWidth(name_col):
+            self._table.setColumnWidth(name_col, need)
 
     def _on_auto_scroll_toggled(self, enabled: bool) -> None:
         self._auto_scroll = bool(enabled)
@@ -1002,6 +1027,7 @@ class TraceViewerDialog(QWidget):
             )
             self._live_index += 1
         self._model.append_live_batch(out)
+        self._maybe_widen_name_column()
         if self._auto_scroll and not self._model.is_collapsed():
             self._scroll_trace_to_bottom()
         self._refresh_status()
@@ -1207,7 +1233,7 @@ class TraceViewerDialog(QWidget):
         self._refresh_status()
 
     def _status(self, message: str) -> None:
-        """Trace events go to the main Log (via package logging handler)."""
+        """Trace events go to the Status panel (via package logging handler)."""
         text = (message or "").strip()
         if not text:
             return

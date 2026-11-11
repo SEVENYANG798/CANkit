@@ -168,30 +168,50 @@ class UpdateAvailableDialog(QDialog):
         QMessageBox.warning(self, "CANkit update", f"Download failed:\n{message}")
 
 
+class _UpdateCheckBridge(QObject):
+    """Receives worker results on the GUI thread (slots → queued across threads)."""
+
+    def __init__(self, ui: QWidget) -> None:
+        super().__init__(ui)
+        self._ui = ui
+
+    @Slot(object)
+    def on_finished(self, info: object) -> None:
+        if not isinstance(info, UpdateInfo):
+            return
+        # Defer past the signal stack / startup Connect dialog settle.
+        QTimer.singleShot(0, self._ui, lambda: self._show(info))
+
+    def _show(self, info: UpdateInfo) -> None:
+        ui = self._ui
+        if ui is None:
+            return
+        UpdateAvailableDialog(info, parent=ui).exec()
+
+    @Slot(str)
+    def on_failed(self, message: str) -> None:
+        logger.info("Update check failed: %s", message)
+
+
 def schedule_update_check(parent: QWidget) -> None:
     """Non-blocking startup check (only prompts when a newer release exists)."""
     thread = QThread(parent)
     worker = _CheckWorker()
     worker.moveToThread(thread)
-
-    def _on_info(info: object) -> None:
-        thread.quit()
-        if not isinstance(info, UpdateInfo):
-            return
-        # Defer past startup UI settle — avoids a flash-dismissed dialog.
-        QTimer.singleShot(0, lambda: UpdateAvailableDialog(info, parent=parent).exec())
-
-    def _on_fail(message: str) -> None:
-        logger.info("Update check failed: %s", message)
-        thread.quit()
+    bridge = _UpdateCheckBridge(parent)
 
     thread.started.connect(worker.run)
-    worker.finished.connect(_on_info)
-    worker.failed.connect(_on_fail)
+    # Bridge lives on the GUI thread — never open QDialog from the worker thread
+    # (0.1.5 did that via a plain lambda and the process flash-exited).
+    worker.finished.connect(bridge.on_finished)
+    worker.failed.connect(bridge.on_failed)
+    worker.finished.connect(thread.quit)
+    worker.failed.connect(thread.quit)
     thread.finished.connect(worker.deleteLater)
     thread.finished.connect(thread.deleteLater)
     parent._update_check_thread = thread  # type: ignore[attr-defined]
     parent._update_check_worker = worker  # type: ignore[attr-defined]
+    parent._update_check_bridge = bridge  # type: ignore[attr-defined]
     thread.start()
 
 
@@ -262,7 +282,9 @@ class AboutDialog(QDialog):
         info = self._update_info
         if info is None:
             return
-        UpdateAvailableDialog(info, parent=self).exec()
+        # Prefer main window as parent so nested About→Update stays on GUI owner.
+        host = self.parentWidget() or self
+        UpdateAvailableDialog(info, parent=host).exec()
 
     def closeEvent(self, event) -> None:  # noqa: ANN001 — Qt override
         thread = self._thread

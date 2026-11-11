@@ -281,6 +281,22 @@ class TraceViewerModel(QAbstractTableModel):
     def dbc_names(self) -> dict[int, str]:
         return self._dbc_names
 
+    def longest_appeared_dbc_name(self) -> str:
+        """Longest DBC name among IDs already in the buffer (not the whole DBC)."""
+        if not self._dbc_names or not self._all:
+            return ""
+        longest = ""
+        seen: set[int] = set()
+        for fr in self._all:
+            arb = fr.arbitration_id
+            if arb in seen:
+                continue
+            seen.add(arb)
+            name = self._dbc_names.get(arb) or ""
+            if name and len(name) > len(longest):
+                longest = name
+        return longest
+
     def display_name(self, fr: TraceFrame) -> str:
         if fr.is_error:
             decoded = decode_pcan_error_frame(fr.arbitration_id, fr.data)

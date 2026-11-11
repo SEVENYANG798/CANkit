@@ -6,14 +6,15 @@ import json
 import re
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QPainter, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
-    QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -25,6 +26,9 @@ from PySide6.QtWidgets import (
 
 _VISIBLE_TX_ROWS = 2
 _TX_ROW_HEIGHT = 28
+_TX_STRIP_WIDTH = 22
+_TX_GRID = "#c4c4c4"
+_TX_HEADER_BG = "#f0f0f0"
 
 from xcp_pcan.can.frame_util import fit_can_payload, next_can_fd_length
 from xcp_pcan.can.transport import CanBusTransport
@@ -39,6 +43,34 @@ _COL_CYCLE = 6
 _COL_SEND = 7
 
 _HEADERS = ("ID", "Len", "Data (hex)", "Period(ms)", "FD", "Ext", "Cycle", "Send")
+
+
+class _TxStrip(QWidget):
+    """PCAN-style side label: one undivided vertical 'Tx' for the whole panel."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedWidth(_TX_STRIP_WIDTH)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.setStyleSheet("background-color: #e8e8e8; border: none;")
+
+    def sizeHint(self) -> QSize:  # noqa: N802 — Qt
+        return QSize(_TX_STRIP_WIDTH, 80)
+
+    def paintEvent(self, event) -> None:  # noqa: ANN001, N802 — Qt
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.setPen(QColor("#424242"))
+        painter.setFont(QFont(self.font().family(), 9, QFont.Weight.DemiBold))
+        painter.translate(0, self.height())
+        painter.rotate(-90)
+        painter.drawText(
+            QRect(0, 0, self.height(), self.width()),
+            Qt.AlignmentFlag.AlignCenter,
+            "Tx",
+        )
+        painter.end()
 
 
 def _parse_can_id(text: str) -> int:
@@ -99,13 +131,40 @@ class TraceTxPanel(QWidget):
         self._table = QTableWidget(0, len(_HEADERS))
         self._table.setHorizontalHeaderLabels(list(_HEADERS))
         self._table.setFont(QFont("Consolas", 9))
+        self._table.setFrameShape(QFrame.Shape.NoFrame)
+        self._table.setShowGrid(True)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self._table.verticalHeader().setVisible(True)
+        # Row numbers off — left Tx strip is the section label (PCAN-style).
+        self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(_TX_ROW_HEIGHT)
         self._table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_context_menu)
+        self._table.setStyleSheet(
+            f"""
+            QTableWidget {{
+                gridline-color: {_TX_GRID};
+                border: none;
+                selection-background-color: #cce4f7;
+                selection-color: #212121;
+            }}
+            QHeaderView::section {{
+                background-color: {_TX_HEADER_BG};
+                color: #212121;
+                padding: 3px 4px;
+                border: none;
+                border-right: 1px solid {_TX_GRID};
+                border-bottom: 1px solid {_TX_GRID};
+            }}
+            QHeaderView::section:last {{
+                border-right: none;
+            }}
+            """
+        )
         hdr = self._table.horizontalHeader()
+        hdr.setHighlightSections(False)
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(False)
         self._table.setColumnWidth(_COL_ID, 80)
@@ -119,33 +178,50 @@ class TraceTxPanel(QWidget):
         hdr.setSectionResizeMode(_COL_DATA, QHeaderView.ResizeMode.Stretch)
         # Viewport shows 2 rows; extra TX rows scroll inside the table.
         header_h = max(hdr.sizeHint().height(), 24)
-        table_h = header_h + _VISIBLE_TX_ROWS * _TX_ROW_HEIGHT + 4
+        body_h = _VISIBLE_TX_ROWS * _TX_ROW_HEIGHT + 4
+        table_h = header_h + body_h
         self._table.setFixedHeight(table_h)
         self._table.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
 
-        btn_add = QPushButton("Add")
-        btn_add.clicked.connect(lambda: self.add_row())
-        btn_del = QPushButton("Remove")
-        btn_del.clicked.connect(self._remove_selected)
-        btn_stop = QPushButton("Stop all cycles")
-        btn_stop.clicked.connect(self.stop_all_cycles)
+        # Left rail: header-height cap (same color as column headers) + Tx body strip.
+        # Avoids the empty corner where a full-height strip met the header.
+        left = QWidget()
+        left.setFixedWidth(_TX_STRIP_WIDTH)
+        left_lay = QVBoxLayout(left)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(0)
+        head_cap = QWidget()
+        head_cap.setFixedSize(_TX_STRIP_WIDTH, header_h)
+        head_cap.setStyleSheet(
+            f"background-color: {_TX_HEADER_BG};"
+            f"border: none;"
+            f"border-right: 1px solid {_TX_GRID};"
+            f"border-bottom: 1px solid {_TX_GRID};"
+        )
+        tx_strip = _TxStrip(self)
+        tx_strip.setFixedHeight(body_h)
+        left_lay.addWidget(head_cap)
+        left_lay.addWidget(tx_strip, stretch=1)
 
-        bar = QHBoxLayout()
-        bar.addWidget(QLabel("Transmit"))
-        bar.addWidget(btn_add)
-        bar.addWidget(btn_del)
-        bar.addWidget(btn_stop)
-        bar.addStretch(1)
-        self._lbl_bus = QLabel("")
-        self._lbl_bus.setStyleSheet("color: #a0a0a0;")
-        bar.addWidget(self._lbl_bus)
+        # Outer box so top/bottom/sides are complete (table alone had no top line).
+        frame = QFrame()
+        frame.setObjectName("txFrame")
+        frame.setStyleSheet(
+            f"QFrame#txFrame {{ border: 1px solid {_TX_GRID}; background: palette(base); }}"
+        )
+        row = QHBoxLayout(frame)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(left)
+        row.addWidget(self._table, stretch=1)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 4, 0, 0)
-        root.addLayout(bar)
-        root.addWidget(self._table)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(frame)
+        self.setFixedHeight(table_h + 2)  # + outer top/bottom border
 
         self._bus_timer = QTimer(self)
         self._bus_timer.setInterval(500)
@@ -161,11 +237,10 @@ class TraceTxPanel(QWidget):
         transport = self._transport_getter()
         open_bus = transport is not None and transport.is_open
         if open_bus:
-            self._lbl_bus.setText("Bus open · Data e.g. 11 22 33 44")
-            self._lbl_bus.setStyleSheet("color: #3d9a5f;")
+            tip = "Bus open · Right-click: Add / Remove / Stop all cycles"
         else:
-            self._lbl_bus.setText("Connect first (main window) · Data e.g. 11 22 33 44")
-            self._lbl_bus.setStyleSheet("color: #b07020;")
+            tip = "Connect first · Right-click: Add / Remove / Stop all cycles"
+        self._table.setToolTip(tip)
 
     def add_row(
         self,
@@ -196,21 +271,45 @@ class TraceTxPanel(QWidget):
 
         chk_cycle = QCheckBox()
         chk_cycle.setStyleSheet("margin-left:12px;")
+        chk_cycle.setToolTip("Checked: cyclic send · Unchecked: single shot")
         chk_cycle.toggled.connect(self._on_cycle_checkbox_toggled)
         self._table.setCellWidget(row, _COL_CYCLE, self._center_widget(chk_cycle))
 
         btn = QPushButton("Send")
         btn.clicked.connect(self._on_send_clicked)
-        self._table.setCellWidget(row, _COL_SEND, btn)
+        self._table.setCellWidget(row, _COL_SEND, self._opaque_cell(btn))
         return row
 
+    def _on_context_menu(self, pos) -> None:  # noqa: ANN001 — Qt slot
+        menu = QMenu(self)
+        menu.addAction("Add", lambda: self.add_row())
+        act_remove = menu.addAction("Remove", self._remove_selected)
+        selected = bool(self._table.selectedIndexes())
+        act_remove.setEnabled(selected)
+        menu.addSeparator()
+        menu.addAction("Stop all cycles", self.stop_all_cycles)
+        menu.exec(self._table.viewport().mapToGlobal(pos))
+
     @staticmethod
-    def _center_widget(inner: QWidget) -> QWidget:
+    def _opaque_cell(inner: QWidget) -> QWidget:
+        """Opaque host so row-selection blue does not show through controls."""
         wrap = QWidget()
+        wrap.setAutoFillBackground(True)
+        pal = wrap.palette()
+        pal.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
+        wrap.setPalette(pal)
         lay = QHBoxLayout(wrap)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.addStretch(1)
+        lay.setSpacing(0)
         lay.addWidget(inner)
+        return wrap
+
+    @classmethod
+    def _center_widget(cls, inner: QWidget) -> QWidget:
+        wrap = cls._opaque_cell(inner)
+        lay = wrap.layout()
+        assert isinstance(lay, QHBoxLayout)
+        lay.insertStretch(0, 1)
         lay.addStretch(1)
         return wrap
 
@@ -219,6 +318,20 @@ class TraceTxPanel(QWidget):
         if wrap is None:
             return None
         return wrap.findChild(QCheckBox)
+
+    def _send_button_at(self, row: int) -> QPushButton | None:
+        w = self._table.cellWidget(row, _COL_SEND)
+        if isinstance(w, QPushButton):
+            return w
+        return w.findChild(QPushButton) if w is not None else None
+
+    def _set_send_label(self, row: int, text: str) -> None:
+        btn = self._send_button_at(row)
+        if btn is not None:
+            btn.setText(text)
+
+    def _is_cycling(self, chk: QCheckBox | None) -> bool:
+        return chk is not None and id(chk) in self._cycle_timers
 
     def _row_of_widget(self, widget: QWidget | None) -> int:
         if widget is None:
@@ -232,14 +345,32 @@ class TraceTxPanel(QWidget):
 
     def _on_send_clicked(self) -> None:
         row = self._row_of_widget(self.sender())  # type: ignore[arg-type]
-        if row >= 0:
-            self._send_row(row)
+        if row < 0:
+            return
+        chk = self._checkbox_at(row, _COL_CYCLE)
+        # Already cycling → Stop restores Send.
+        if self._is_cycling(chk):
+            self._stop_cycle_for_checkbox(chk)
+            self._set_send_label(row, "Send")
+            return
+        # Cycle checked → start periodic; button becomes Stop.
+        if chk is not None and chk.isChecked():
+            if self._start_cycle(row):
+                self._set_send_label(row, "Stop")
+            return
+        # Unchecked → single shot.
+        self._send_row(row)
 
     def _on_cycle_checkbox_toggled(self, enabled: bool) -> None:
         row = self._row_of_widget(self.sender())  # type: ignore[arg-type]
         if row < 0:
             return
-        self._on_cycle_toggled(row, enabled)
+        # Cycle is mode only; unchecking while running stops and restores Send.
+        if not enabled:
+            chk = self._checkbox_at(row, _COL_CYCLE)
+            if self._is_cycling(chk):
+                self._stop_cycle_for_checkbox(chk)
+                self._set_send_label(row, "Send")
 
     def _remove_selected(self) -> None:
         rows = sorted({i.row() for i in self._table.selectedIndexes()}, reverse=True)
@@ -254,11 +385,7 @@ class TraceTxPanel(QWidget):
         for key in list(self._cycle_timers):
             self._stop_cycle_key(key)
         for row in range(self._table.rowCount()):
-            chk = self._checkbox_at(row, _COL_CYCLE)
-            if chk is not None and chk.isChecked():
-                chk.blockSignals(True)
-                chk.setChecked(False)
-                chk.blockSignals(False)
+            self._set_send_label(row, "Send")
 
     def _stop_cycle_key(self, key: int) -> None:
         timer = self._cycle_timers.pop(key, None)
@@ -271,35 +398,21 @@ class TraceTxPanel(QWidget):
             return
         self._stop_cycle_key(id(chk))
 
-    def _uncheck_cycle(self, chk: QCheckBox | None) -> None:
-        self._stop_cycle_for_checkbox(chk)
-        if chk is not None and chk.isChecked():
-            chk.blockSignals(True)
-            chk.setChecked(False)
-            chk.blockSignals(False)
-
-    def _on_cycle_toggled(self, row: int, enabled: bool) -> None:
+    def _start_cycle(self, row: int) -> bool:
         chk = self._checkbox_at(row, _COL_CYCLE)
-        if not enabled:
-            self._stop_cycle_for_checkbox(chk)
-            return
         try:
             period = int((self._table.item(row, _COL_PERIOD).text() or "0").strip())
         except (AttributeError, ValueError):
             period = 0
         if period < 1:
             QMessageBox.warning(self, "Transmit", "Period(ms) must be >= 1 for cycle send.")
-            self._uncheck_cycle(chk)
-            return
+            return False
         transport = self._transport_getter()
         if transport is None or not transport.is_open:
             QMessageBox.information(self, "Transmit", "Open the CAN bus first (Connect).")
-            self._uncheck_cycle(chk)
-            return
-        # First send not quiet so parse/ID errors are visible.
+            return False
         if not self._send_row(row, quiet=False):
-            self._uncheck_cycle(chk)
-            return
+            return False
         self._stop_cycle_for_checkbox(chk)
         timer = QTimer(self)
         timer.setInterval(period)
@@ -307,14 +420,19 @@ class TraceTxPanel(QWidget):
         def _tick(box: QCheckBox | None = chk) -> None:
             r = self._row_of_widget(box)
             if r < 0 or box is None or not box.isChecked():
-                self._uncheck_cycle(box)
+                self._stop_cycle_for_checkbox(box)
+                if r >= 0:
+                    self._set_send_label(r, "Send")
                 return
-            self._send_row(r, quiet=True)
+            if not self._send_row(r, quiet=True):
+                self._stop_cycle_for_checkbox(box)
+                self._set_send_label(r, "Send")
 
         timer.timeout.connect(_tick)
         if chk is not None:
             self._cycle_timers[id(chk)] = timer
         timer.start()
+        return True
 
     def _read_row(self, row: int) -> tuple[int, bytes, bool, bool]:
         id_item = self._table.item(row, _COL_ID)
@@ -356,8 +474,6 @@ class TraceTxPanel(QWidget):
         if transport is None or not transport.is_open:
             if not quiet:
                 QMessageBox.information(self, "Transmit", "Open the CAN bus first (Connect).")
-            else:
-                self._uncheck_cycle(self._checkbox_at(row, _COL_CYCLE))
             return False
         try:
             arb, data, fd, ext = self._read_row(row)
@@ -369,8 +485,6 @@ class TraceTxPanel(QWidget):
                         "CAN bus is Classic — uncheck FD on the TX row, "
                         "or Disconnect and Connect with CAN FD enabled.",
                     )
-                else:
-                    self._uncheck_cycle(self._checkbox_at(row, _COL_CYCLE))
                 return False
             transport.send(
                 arb,
@@ -383,8 +497,6 @@ class TraceTxPanel(QWidget):
         except Exception as exc:  # noqa: BLE001
             if not quiet:
                 QMessageBox.warning(self, "Transmit failed", str(exc))
-            else:
-                self._uncheck_cycle(self._checkbox_at(row, _COL_CYCLE))
             return False
 
     def export_rows(self) -> list[dict]:

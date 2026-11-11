@@ -38,7 +38,6 @@ from xcp_pcan.ui.app_log import (
     apply_verbose_levels,
     ensure_filter_capture,
 )
-from xcp_pcan.ui.collapsible import CollapsibleSection
 from xcp_pcan.ui.connection_panel import ConnectionPanel
 from xcp_pcan.ui.models import SymbolTableModel, WatchTableModel
 from xcp_pcan.ui.mw_connect import ConnectMixin
@@ -180,6 +179,11 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._act_can_disconnect.triggered.connect(self._disconnect)
         self._can_menu.addAction(self._act_can_connect)
         self._can_menu.addAction(self._act_can_disconnect)
+        self._act_log = QAction("Status", self)
+        self._act_log.setCheckable(True)
+        self._act_log.setToolTip("Show or hide the Status panel")
+        self._act_log.toggled.connect(self._on_log_visible)
+        self._can_menu.addAction(self._act_log)
         btn_can = QToolButton()
         btn_can.setText("CAN")
         btn_can.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -329,9 +333,9 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
             settings_key="ui_mid_splitter",
         )
 
-        self._fold_log = self._build_log_panel()
+        self._log_panel = self._build_log_panel()
         self._splitter.addWidget(self._trace_viewer)
-        self._splitter.addWidget(self._fold_log)
+        self._splitter.addWidget(self._log_panel)
         self._configure_splitter(
             self._splitter,
             stretch=(5, 1),
@@ -341,8 +345,11 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         )
         root.addWidget(self._splitter, stretch=1)
 
-        if not self._fold_log.is_expanded():
-            self._apply_log_height(False)
+        log_open = bool(self._settings.value("ui_log_open", True, type=bool))
+        self._act_log.blockSignals(True)
+        self._act_log.setChecked(log_open)
+        self._act_log.blockSignals(False)
+        self._apply_log_visible(log_open, persist=False)
 
         status = QStatusBar()
         status.setSizeGripEnabled(True)
@@ -373,22 +380,30 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
             )
         )
 
-    def _apply_log_height(self, expanded: bool) -> None:
+    def _apply_log_visible(self, visible: bool, *, persist: bool = True) -> None:
         sizes = self._splitter.sizes()
         total = sum(sizes) or 780
-        if expanded:
+        if visible:
+            self._log_panel.setVisible(True)
             log_h = int(self._settings.value("ui_log_height", 160) or 160)
             log_h = max(80, min(log_h, total - 200))
+            self._splitter.setSizes([max(total - log_h, 200), log_h])
         else:
             if sizes and sizes[-1] > 48:
                 self._settings.setValue("ui_log_height", sizes[-1])
-            log_h = max(28, self._fold_log.sizeHint().height())
-        self._splitter.setSizes([max(total - log_h, 200), log_h])
+            self._log_panel.setVisible(False)
+            self._splitter.setSizes([total, 0])
+        if persist:
+            self._settings.setValue("ui_log_open", visible)
+
+    def _on_log_visible(self, visible: bool) -> None:
+        self._apply_log_visible(bool(visible))
 
     def _build_log_panel(self) -> QWidget:
         body = QWidget()
         layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Filter:"))
         self.cmb_log_filter = QComboBox()
@@ -430,19 +445,7 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._log_buffer.set_filter(mode)
         apply_verbose_levels(verbose=bool(verbose))
         ensure_filter_capture(mode)
-        fold = CollapsibleSection(
-            "Log",
-            expanded=self._settings.value("ui_log_open", True, type=bool),
-            indent=0,
-            framed=True,
-        )
-        fold.add_widget(body)
-        fold.toggled.connect(self._on_log_folded)
-        return fold
-
-    def _on_log_folded(self, expanded: bool) -> None:
-        self._settings.setValue("ui_log_open", expanded)
-        self._apply_log_height(expanded)
+        return body
 
     def _install_log_handler(self) -> None:
         handler = GuiLogHandler(lambda e: self._bridge.log_entry.emit(e), level=logging.DEBUG)
@@ -453,7 +456,7 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         apply_verbose_levels(verbose=self.chk_log_verbose.isChecked())
         self._log_handler = handler
 
-    # --- Log / shutdown ---------------------------------------------------------
+    # --- Status panel / shutdown ------------------------------------------------
 
     @Slot(object)
     def _on_log_entry(self, entry: object) -> None:

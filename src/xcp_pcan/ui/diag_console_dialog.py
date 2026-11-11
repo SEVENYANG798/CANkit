@@ -98,8 +98,10 @@ def _polish_diag_table(
 ) -> None:
     """Unified table chrome: single frame, matching header/grid, bold-only selection.
 
-    compact=True (Request/Response): no bottom widget border — last row gridline is
-    the bottom edge. Fixed-height + full border + grid otherwise draws two bottom lines.
+    compact=True (Request/Response): top/left only — last gridlines are right/bottom.
+    compact=False (Trace): top/left/bottom; no right border (grid + scrollbar edge).
+    Without a right widget border, AsNeeded scrollbars hide and last-column grid
+    stacks on the frame → heavy line; AlwaysOn keeps a single edge when idle.
     """
     table.setFrameShape(QFrame.Shape.NoFrame)
     table.setShowGrid(True)
@@ -112,15 +114,20 @@ def _polish_diag_table(
     hdr.setHighlightSections(False)
     hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
     hdr.setMinimumHeight(26)
-    # Compact: top/left/right only; scrolling Trace keeps full box.
+    # Never put border-right on the widget: it doubles the last-column gridline
+    # whenever the vertical scrollbar is hidden.
     box_border = (
         f"border-top: 1px solid {_TABLE_GRID};"
         f"border-left: 1px solid {_TABLE_GRID};"
-        f"border-right: 1px solid {_TABLE_GRID};"
-        "border-bottom: none;"
-        if compact
-        else f"border: 1px solid {_TABLE_GRID};"
+        "border-right: none;"
+        + (
+            "border-bottom: none;"
+            if compact
+            else f"border-bottom: 1px solid {_TABLE_GRID};"
+        )
     )
+    if not compact:
+        table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
     table.setStyleSheet(
         f"""
         QTableWidget {{
@@ -141,7 +148,7 @@ def _polish_diag_table(
             border-bottom: 1px solid {_TABLE_GRID};
         }}
         QHeaderView::section:last {{
-            border-right: none;
+            border-right: 1px solid {_TABLE_GRID};
         }}
         """
     )

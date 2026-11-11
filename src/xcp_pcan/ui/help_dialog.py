@@ -18,7 +18,7 @@ HELP_HTML = """
 <li><b>Data Editor</b>：Load A2L/ELF、Resolve addresses from ELF、Update A2L from ELF、Create A2L from ELF。</li>
 <li><b>XCP Viewer</b>：符号列表与 Polling / DAQ 观测（弹窗）。</li>
 <li><b>Diagnostic Console</b>：UDS over ISO-TP（会话、DID、安全访问、例程、刷写模板等）。</li>
-<li>主界面为 <b>Trace</b>（离线日志 / 在线 Monitor / 发报文）与底部 Log。</li>
+<li>主界面为 <b>Trace</b>（离线日志 / 在线 Monitor / 发报文）；底部 Status 由 <b>CAN → Status</b> 显示/隐藏。</li>
 </ul>
 
 <h3>2. 连接（主窗口）</h3>
@@ -50,7 +50,7 @@ HELP_HTML = """
 <p>把要观测的名字放进文件夹里的 txt：一个名字一行；文件名作为分组标签（如 <b>batt.txt</b> → <b>Batt</b>）。</p>
 <ul>
 <li>能对上的符号进入当前 Polling / DAQ 并按标签分组；仅差前导下划线也会匹配（<code>Foo</code> ↔ <code>_Foo</code>）。</li>
-<li>含中文、路径或空格的行会使整份 txt 被跳过（说明文件不会当名单）。未匹配名写在 Log 里。</li>
+<li>含中文、路径或空格的行会使整份 txt 被跳过（说明文件不会当名单）。未匹配名写在 Status 里。</li>
 <li>观测树支持 <b>Fold all / Expand all</b>；选中标签后 <b>Remove</b> 可去掉该组。</li>
 </ul>
 
@@ -67,7 +67,7 @@ HELP_HTML = """
 <li><b>Open</b>：离线 ASC / BLF / CSV。<b>Start Monitor</b>：在已 Connect 的总线上实时收发（不需要 XCP）。</li>
 <li>搜索框按 ID / 数据 / 名称 / 通道 / rx|tx|err 过滤；表头 <b>ID▾</b> / <b>Dir▾</b> 可再筛；<b>Reset filters</b> 清空。</li>
 <li><b>Collapse by ID</b>：按 ID 折叠时间线。<b>Load DBC</b> 后选中帧可看信号解码；下方详情可开关。</li>
-<li><b>Transmit</b>：最多两行发送；支持 FD / Ext、单发或按 Period 循环发送（需先 Connect）。</li>
+<li><b>Transmit</b>：右键 Add / Remove / Stop all；Cycle 勾选为周期发（Send↔Stop），不勾为单发（需先 Connect）。</li>
 </ul>
 
 <h3>7. Diagnostic Console</h3>
@@ -83,7 +83,7 @@ RoutineControl（31）、Programming（34/36/37）、ECU Reset（11）、TesterP
 <h3>8. 工程与日志</h3>
 <ul>
 <li>默认工程在用户目录 <b>.xcp_pcan\\default.xcpp</b>（连接、安全、韧性、符号路径、观测列表等）。</li>
-<li>底部 <b>Log</b> 可折叠；Filter：All / App / XCP / CAN / Errors。<b>Verbose</b> 打开 CAN/XCP DEBUG。</li>
+<li><b>CAN → Status</b> 显示/隐藏操作状态与提示；Filter：All / App / XCP / CAN / Errors。<b>Verbose</b> 打开 CAN/XCP DEBUG。</li>
 </ul>
 
 <h3>9. 运行环境</h3>
