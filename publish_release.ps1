@@ -43,7 +43,7 @@ function Set-ProjectVersion([string]$NewVersion) {
     $pyPath = Join-Path $Root "pyproject.toml"
     $initPath = Join-Path $Root "src\xcp_pcan\__init__.py"
     $py = Get-Content -LiteralPath $pyPath -Raw
-    $py2 = [regex]::Replace($py, 'version\s*=\s*"[^"]+"', "version = `"$NewVersion`"", 1)
+    $py2 = [regex]::Replace($py, '(?m)^version\s*=\s*"[^"]+"', "version = `"$NewVersion`"", 1)
     if ($py2 -eq $py) { throw "Failed to update version in pyproject.toml" }
     Set-Content -LiteralPath $pyPath -Value $py2 -Encoding utf8 -NoNewline
 

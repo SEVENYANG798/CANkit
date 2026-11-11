@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, QPoint, QSettings, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -37,6 +38,7 @@ from xcp_pcan.can.frame_util import CanFrame
 from xcp_pcan.can.transport import CanBusTransport
 from xcp_pcan.trace_log.dbc_decode import DbcDatabase
 from xcp_pcan.trace_log.types import TraceFrame
+from xcp_pcan.trace_log.writers import save_trace, sniff_save_format
 from xcp_pcan.ui.trace_signal_plot_dialog import TraceSignalPlotDialog
 from xcp_pcan.ui.trace_tx_panel import TraceTxPanel
 from xcp_pcan.ui.trace_viewer_model import TraceViewerModel
@@ -167,7 +169,8 @@ class TraceViewerDialog(QDialog):
         self._table = QTableView()
         self._table.setModel(self._model)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # Ctrl+click / Shift+click multi-select for partial Save.
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setAlternatingRowColors(True)
         self._table.setSortingEnabled(False)
         vh = self._table.verticalHeader()
@@ -180,6 +183,8 @@ class TraceViewerDialog(QDialog):
         self._table.horizontalHeader().setStretchLastSection(False)
         self._table.selectionModel().selectionChanged.connect(self._on_selection)
         self._table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_table_context_menu)
 
         self._detail = QTextEdit()
         self._detail.setReadOnly(True)
@@ -246,9 +251,6 @@ class TraceViewerDialog(QDialog):
             "Observe RX/TX on the open CAN bus. Connect opens the bus; XCP is not required."
         )
         self.btn_live.clicked.connect(self._toggle_live)
-        btn_clear = QPushButton("Clear")
-        btn_clear.setToolTip("Clear the frame table.")
-        btn_clear.clicked.connect(self._clear_table)
         btn_reset_f = QPushButton("Reset filters")
         btn_reset_f.setToolTip("Clear text, ID▾ and Dir▾ filters.")
         btn_reset_f.clicked.connect(self._clear_filter)
@@ -256,7 +258,6 @@ class TraceViewerDialog(QDialog):
         top = QHBoxLayout()
         top.addWidget(btn_open)
         top.addWidget(self.btn_live)
-        top.addWidget(btn_clear)
         top.addWidget(btn_dbc)
         top.addWidget(btn_dbc_clear)
         top.addWidget(self.btn_signal_plot)
@@ -467,6 +468,107 @@ class TraceViewerDialog(QDialog):
         )
         if path:
             self.load_path(path)
+
+    def _on_table_context_menu(self, pos: QPoint) -> None:
+        menu = QMenu(self)
+        act_clear = menu.addAction("清除日志")
+        act_save_all = menu.addAction("保存全部日志")
+        act_save_all.setToolTip("Save the whole buffer as ASC / BLF / CSV.")
+        act_save_sel = menu.addAction("保存选中日志")
+        act_save_sel.setToolTip(
+            "Save selected rows (Ctrl+click / Shift+click). ASC / BLF / CSV."
+        )
+        sel_n = len(self._table.selectionModel().selectedRows())
+        act_save_sel.setEnabled(sel_n > 0)
+        chosen = menu.exec(self._table.viewport().mapToGlobal(pos))
+        if chosen is act_clear:
+            self._clear_table()
+        elif chosen is act_save_all:
+            self._save(selected_only=False)
+        elif chosen is act_save_sel:
+            self._save(selected_only=True)
+
+    def _selected_frames(self) -> list[TraceFrame]:
+        """Frames for selected table rows (timeline rows, or all msgs of selected IDs)."""
+        indexes = self._table.selectionModel().selectedRows()
+        if not indexes:
+            return []
+        rows = sorted({idx.row() for idx in indexes})
+        if self._model.is_collapsed():
+            ids: set[int] = set()
+            for row in rows:
+                fr = self._model.frame_at(row)
+                if fr is not None:
+                    ids.add(fr.arbitration_id)
+            if not ids:
+                return []
+            return [fr for fr in self._model.all_frames() if fr.arbitration_id in ids]
+        out: list[TraceFrame] = []
+        for row in rows:
+            fr = self._model.frame_at(row)
+            if fr is not None:
+                out.append(fr)
+        return out
+
+    def _save(self, *, selected_only: bool = False) -> None:
+        # Flush pending live frames so Save matches what is on screen.
+        if self._pending_live:
+            self._flush_live_frames()
+        if selected_only:
+            frames = self._selected_frames()
+            if not frames:
+                QMessageBox.information(
+                    self,
+                    self._title(),
+                    "No rows selected.\n"
+                    "Use Ctrl+click or Shift+click to select, then 保存选中日志.",
+                )
+                return
+        else:
+            frames = self._model.all_frames()
+            if not frames:
+                QMessageBox.information(
+                    self,
+                    self._title(),
+                    "No frames to save. Start Monitor or Open a trace first.",
+                )
+                return
+        start = self._settings.value("trace_viewer/save_dir", "", str)
+        if not start:
+            start = self._settings.value("trace_viewer/dir", "", str)
+        path, selected = QFileDialog.getSaveFileName(
+            self,
+            "Save selected trace" if selected_only else "Save trace",
+            start,
+            "ASC (*.asc);;BLF (*.blf);;CSV (*.csv);;All (*.*)",
+        )
+        if not path:
+            return
+        # Ensure suffix matches the chosen filter when the user omits it.
+        lower = path.lower()
+        if not (lower.endswith(".asc") or lower.endswith(".blf") or lower.endswith(".csv")):
+            if "BLF" in selected:
+                path += ".blf"
+            elif "CSV" in selected:
+                path += ".csv"
+            else:
+                path += ".asc"
+        try:
+            fmt = sniff_save_format(path)
+        except ValueError as exc:
+            QMessageBox.warning(self, self._title(), str(exc))
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            n = save_trace(path, frames, fmt=fmt)
+        except Exception as exc:  # noqa: BLE001 — show path + reason in UI
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, self._title(), f"Failed to save:\n{exc}")
+            return
+        QApplication.restoreOverrideCursor()
+        self._settings.setValue("trace_viewer/save_dir", str(Path(path).parent))
+        kind = "selected" if selected_only else "all"
+        self.lbl_status.setText(f"Saved {n} frames ({kind}) → {Path(path).name}")
 
     def _restore_pending_dbc(self) -> None:
         path = getattr(self, "_pending_dbc_path", None)
