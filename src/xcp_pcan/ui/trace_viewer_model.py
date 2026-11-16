@@ -64,6 +64,15 @@ def _collapse_key(fr: TraceFrame) -> tuple[int, bool, bool]:
     return (fr.arbitration_id, fr.is_rx, fr.is_error)
 
 
+def parse_text_filter(text: str) -> list[str] | None:
+    """Parse search box: ``488&486`` keeps frames matching any term (OR)."""
+    raw = text.strip()
+    if not raw:
+        return None
+    terms = [t.strip().lower() for t in raw.lower().split("&") if t.strip()]
+    return terms or None
+
+
 class TraceViewerModel(QAbstractTableModel):
     def __init__(self, parent=None, *, live_maxlen: int = 50_000) -> None:
         super().__init__(parent)
@@ -76,6 +85,7 @@ class TraceViewerModel(QAbstractTableModel):
         self._id_filter: set[int] | None = None
         self._id_mask: int | None = None
         self._text = ""
+        self._text_terms: list[str] | None = None
         self._rx_only: bool | None = None  # True=RX, False=TX, None=all
         self._errors_only = False
         self._live_maxlen = max(1000, live_maxlen)
@@ -328,6 +338,7 @@ class TraceViewerModel(QAbstractTableModel):
 
     def set_text_filter(self, text: str) -> int:
         self._text = text
+        self._text_terms = parse_text_filter(text)
         return self.reapply_filter()
 
     def apply_filter(
@@ -344,6 +355,7 @@ class TraceViewerModel(QAbstractTableModel):
             self._id_filter = None if not id_values else set(id_values)
             self._id_mask = id_mask
         self._text = text
+        self._text_terms = parse_text_filter(text)
         self._rx_only = rx_only
         self._errors_only = errors_only
         return self.reapply_filter()
@@ -396,8 +408,8 @@ class TraceViewerModel(QAbstractTableModel):
                     return False
             elif fr.arbitration_id not in ids:
                 return False
-        needle = self._text.strip().lower()
-        if needle:
+        terms = self._text_terms
+        if terms:
             dbc = self._dbc_names.get(fr.arbitration_id, "")
             direction = "rx" if fr.is_rx else "tx"
             flags = [fr.type_label().lower()]
@@ -405,7 +417,7 @@ class TraceViewerModel(QAbstractTableModel):
                 f"{fr.id_hex()} {fr.data_hex()} {fr.name} {dbc} {fr.channel} "
                 f"{direction} {' '.join(flags)}"
             ).lower()
-            if needle not in blob:
+            if not any(term in blob for term in terms):
                 return False
         return True
 
@@ -415,7 +427,7 @@ class TraceViewerModel(QAbstractTableModel):
             not self._errors_only
             and self._rx_only is None
             and not self._id_filter
-            and not self._text.strip()
+            and not self._text_terms
         ):
             return frames
         return [fr for fr in frames if self._passes(fr)]

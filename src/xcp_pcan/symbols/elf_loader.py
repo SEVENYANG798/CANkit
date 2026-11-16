@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from elftools.elf.elffile import ELFFile
@@ -54,8 +55,17 @@ def _dwarf_type_size(die, dwarfinfo, depth: int = 0) -> int | None:
     return None
 
 
-def _dwarf_sizes(elffile: ELFFile) -> dict[str, int]:
-    """Map variable name -> byte size from DWARF if available."""
+def _dwarf_sizes(
+    elffile: ELFFile,
+    *,
+    only_names: set[str] | None = None,
+    on_progress: ProgressCallback | None = None,
+) -> dict[str, int]:
+    """Map variable name -> byte size from DWARF if available.
+
+    Large automotive ELFs can have millions of DIEs — always report progress and
+    stop early once ``only_names`` (if given) is fully resolved.
+    """
     sizes: dict[str, int] = {}
     if not elffile.has_dwarf_info():
         return sizes
@@ -65,7 +75,22 @@ def _dwarf_sizes(elffile: ELFFile) -> dict[str, int]:
         logger.exception("Failed to read DWARF")
         return sizes
 
-    for cu in dwarfinfo.iter_CUs():
+    want = set(only_names) if only_names is not None else None
+    try:
+        cu_list = list(dwarfinfo.iter_CUs())
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to iterate DWARF CUs")
+        return sizes
+    total = max(len(cu_list), 1)
+    for cu_i, cu in enumerate(cu_list):
+        if want is not None and not want:
+            break
+        if cu_i % 5 == 0:
+            _report(
+                on_progress,
+                f"Scanning DWARF sizes… CU {cu_i}/{total}",
+                0.55 + 0.3 * (cu_i / total),
+            )
         try:
             for die in cu.iter_DIEs():
                 if die.tag not in ("DW_TAG_variable",):
@@ -75,9 +100,13 @@ def _dwarf_sizes(elffile: ELFFile) -> dict[str, int]:
                 name = die.attributes["DW_AT_name"].value
                 if isinstance(name, bytes):
                     name = name.decode("utf-8", errors="replace")
+                if want is not None and name not in want:
+                    continue
                 size = _dwarf_type_size(die, dwarfinfo)
                 if size:
                     sizes[name] = size
+                    if want is not None:
+                        want.discard(name)
         except Exception:  # noqa: BLE001
             logger.debug("Skipping CU due to DWARF parse issue", exc_info=True)
     return sizes
@@ -88,7 +117,14 @@ def load_elf(
     *,
     on_progress: ProgressCallback | None = None,
     use_cache: bool = True,
+    use_dwarf_sizes: bool = False,
 ) -> SymbolStore:
+    """Load ELF data symbols.
+
+    ``use_dwarf_sizes`` defaults to False: full DWARF walks on ~100MB+ GHS ELFs
+    can take many minutes and look like a freeze. Symtab ``st_size`` is enough
+    for most objects; missing sizes default to 4 bytes.
+    """
     path = Path(path)
     if use_cache:
         cached = elf_cache.try_load(path)
@@ -105,11 +141,10 @@ def load_elf(
     _report(on_progress, f"Reading {path.name}…", 0.05)
     with path.open("rb") as f:
         elffile = ELFFile(f)
-        _report(on_progress, "Scanning DWARF sizes…", 0.2)
-        dwarf_sizes = _dwarf_sizes(elffile)
-        _report(on_progress, "Reading symbol tables…", 0.45)
+        _report(on_progress, "Reading symbol tables…", 0.15)
 
         sym_i = 0
+        need_size: set[str] = set()
         for section in elffile.iter_sections():
             if not isinstance(section, SymbolTableSection):
                 continue
@@ -119,7 +154,7 @@ def load_elf(
                     _report(
                         on_progress,
                         f"Reading symbol tables… ({sym_i})",
-                        min(0.85, 0.45 + 0.001 * (sym_i // 5000)),
+                        min(0.5, 0.15 + 0.001 * (sym_i // 5000)),
                     )
                 name = sym.name
                 if not name or name.startswith("$"):
@@ -128,14 +163,15 @@ def load_elf(
                 if sym["st_info"]["type"] not in ("STT_OBJECT", "STT_NOTYPE"):
                     continue
                 addr = int(sym["st_value"])
-                size = int(sym["st_size"]) or dwarf_sizes.get(name, 0)
+                size = int(sym["st_size"])
                 if addr == 0 and size == 0:
                     continue
                 # Skip undefined
                 if sym["st_shndx"] == "SHN_UNDEF":
                     continue
                 if size <= 0:
-                    size = dwarf_sizes.get(name, 4)
+                    need_size.add(name)
+                    size = 4
                 datatype = _datatype_from_size(size)
                 # Prefer known dwarf mapping name hints
                 if name.endswith("_f32") or name.endswith("Float"):
@@ -154,6 +190,20 @@ def load_elf(
                         address_source="elf",
                     )
                 )
+
+        dwarf_sizes: dict[str, int] = {}
+        if use_dwarf_sizes and need_size:
+            _report(on_progress, "Scanning DWARF sizes…", 0.55)
+            dwarf_sizes = _dwarf_sizes(
+                elffile, only_names=need_size, on_progress=on_progress
+            )
+            if dwarf_sizes:
+                for i, v in enumerate(variables):
+                    sz = dwarf_sizes.get(v.name)
+                    if sz and sz > 0 and v.name in need_size:
+                        variables[i] = replace(
+                            v, size=sz, datatype=_datatype_from_size(sz)
+                        )
 
     _report(on_progress, "Deduplicating…", 0.9)
     # Deduplicate by name (prefer larger size / first with address)

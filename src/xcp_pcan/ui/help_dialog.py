@@ -25,7 +25,7 @@ HELP_HTML = """
 <ul>
 <li><b>CAN → Connect</b> 打开配置对话框（标签：CAN Setup / Session / Security），确认后打开总线。
 <b>CAN → Disconnect</b> 关闭总线。快捷键 Ctrl+B / Ctrl+D。
-同菜单下还有 Trace：Log Replay、Start/Stop Monitor、Load/Remove DBC、Graphic、Reset filters、Collapse by ID、Auto-scroll、Detail。
+同菜单下还有 Trace：Log Replay、Start/Stop Monitor、Load/Remove DBC、Graphic、Collapse by ID、Auto-scroll、Detail。
 主界面搜索框左侧有 Connect / Disconnect / Start / Pause / Stop 快捷图标。</li>
 <li><b>Hardware</b>：PCAN 或 Vector。Vector 用 ↻ 刷新设备；未检测到时显示 Not detected，通道回退为 Channel 0–3。</li>
 <li><b>Nom bitrate / CAN FD / Data</b>：须与总线一致。FD 总线上开 Classic 只会看到错误帧。</li>
@@ -65,7 +65,7 @@ HELP_HTML = """
 <h3>6. Trace Viewer</h3>
 <ul>
 <li><b>Open</b>：离线 ASC / BLF / CSV。<b>Start Monitor</b>：在已 Connect 的总线上实时收发（不需要 XCP）。</li>
-<li>搜索框按 ID / 数据 / 名称 / 通道 / rx|tx|err 过滤；表头 <b>ID▾</b> / <b>Dir▾</b> 可再筛；<b>Reset filters</b> 清空。</li>
+<li>搜索框按 ID / 数据 / 名称 / 通道过滤；多个条件用 <code>&amp;</code>，如 <code>488&amp;486</code>（匹配任一）。表头 <b>ID▾</b> / <b>Dir▾</b> 可再筛；搜索框旁清空按钮可清过滤。</li>
 <li><b>Collapse by ID</b>：按 ID 折叠时间线。<b>Load DBC</b> 后选中帧可看信号解码；下方详情可开关。</li>
 <li><b>Transmit</b>：右键 Add / Remove / Stop all；Cycle 勾选为周期发（Send↔Stop），不勾为单发（需先 Connect）。</li>
 </ul>

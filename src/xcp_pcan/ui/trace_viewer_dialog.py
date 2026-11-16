@@ -206,10 +206,11 @@ class TraceViewerDialog(QWidget):
         self._detail.hide()
 
         self.edt_text = QLineEdit()
-        self.edt_text.setPlaceholderText("Search ID / data / name / channel / rx|tx|err")
+        self.edt_text.setPlaceholderText("Search ID / data / name…  e.g. 488&486")
         self.edt_text.setClearButtonEnabled(True)
         self.edt_text.setToolTip(
-            "Filter as you type (ID / data / name / channel / rx|tx|err). Enter applies immediately."
+            "Filter as you type (ID / data / name / channel / rx|tx|err). "
+            "Use & for multiple terms, e.g. 488&486. Enter applies immediately."
         )
         self._text_filter_timer = QTimer(self)
         self._text_filter_timer.setSingleShot(True)
@@ -241,9 +242,6 @@ class TraceViewerDialog(QWidget):
         )
         self.act_signal_plot.triggered.connect(self._open_signal_plot)
         self.act_signal_plot.setEnabled(False)
-        self.act_reset_filters = QAction("Reset filters", self)
-        self.act_reset_filters.setToolTip("Clear text, ID▾ and Dir▾ filters.")
-        self.act_reset_filters.triggered.connect(self._clear_filter)
         self.act_collapse = QAction("Collapse by ID", self)
         self.act_collapse.setCheckable(True)
         self.act_collapse.setToolTip(
@@ -568,7 +566,6 @@ class TraceViewerDialog(QWidget):
             self.act_load_dbc,
             self.act_clear_dbc,
             self.act_signal_plot,
-            self.act_reset_filters,
             self.act_collapse,
             self.act_auto_scroll,
             self.act_detail,

@@ -249,6 +249,23 @@ class MeasureMixin:
     def _sync_poller_vars(self) -> None:
         self._poller.set_variables(self._poll_watch_model.variables())
 
+    def _rebind_watches_from_store(self) -> tuple[int, int]:
+        """Refresh Poll/DAQ watch addresses after A2L/ELF reload."""
+        u1, m1 = self._poll_watch_model.rebind_from_store(self._store)
+        u2, m2 = self._daq_watch_model.rebind_from_store(self._store)
+        updated, missing = u1 + u2, m1 + m2
+        self._sync_poller_vars()
+        # DAQ list was programmed with old addresses — force a clean stop.
+        if updated and self._daq.is_running:
+            self._stop_daq()
+            self._append_log("DAQ stopped — watch addresses changed; Start DAQ again.")
+        if updated or missing:
+            self._append_log(
+                f"Watch rebind: {updated} updated from new symbols"
+                + (f", {missing} not found" if missing else "")
+            )
+        return updated, missing
+
     def _record_sample(self, buffer: TraceBuffer, sample: PollSample) -> None:
         if sample.error or sample.physical is None:
             return

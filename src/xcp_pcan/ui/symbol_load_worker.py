@@ -51,17 +51,21 @@ class SymbolLoadWorker(QThread):
             path = self._path
             suffix = path.suffix.lower()
             last_emit = 0.0
+            last_msg = ""
             pending: tuple[str, float] | None = None
 
             def on_progress(msg: str, frac: float) -> None:
-                nonlocal last_emit, pending
+                nonlocal last_emit, last_msg, pending
                 if self.isInterruptionRequested():
                     raise SymbolLoadCancelled()
                 pending = (msg, frac)
                 now = time.monotonic()
-                if frac >= 1.0 or (now - last_emit) >= 0.2:
+                # Always push phase changes — otherwise a long DWARF/symtab gap
+                # leaves the dialog stuck on the previous 5% "Reading…" label.
+                if frac >= 1.0 or msg != last_msg or (now - last_emit) >= 0.2:
                     self.progress.emit(msg, frac)
                     last_emit = now
+                    last_msg = msg
                     pending = None
                     # Let the GUI thread run while we hold the interpreter briefly.
                     time.sleep(0.002)

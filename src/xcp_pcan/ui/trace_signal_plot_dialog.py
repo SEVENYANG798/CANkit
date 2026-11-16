@@ -37,6 +37,7 @@ _PALETTE = (
 )
 
 _MAX_SERIES = 8
+_ID_MASK = 0x1FFFFFFF
 
 
 def _fmt_id(arb: int) -> str:
@@ -394,9 +395,20 @@ class TraceSignalPlotDialog(QDialog):
         configure_tool_window(self)
         self._dbc = dbc
         self._frames = list(frames)
+        # Only IDs that both appear in this Trace and exist in the DBC.
+        appeared = {
+            int(fr.arbitration_id) & _ID_MASK
+            for fr in self._frames
+            if not getattr(fr, "is_error", False)
+        }
+        messages = [
+            (msg, fid) for msg, fid in dbc.list_messages() if fid in appeared
+        ]
+        wanted = {msg for msg, _fid in messages}
         self._by_message: dict[str, list[SignalInfo]] = {}
         for info in dbc.list_signals():
-            self._by_message.setdefault(info.message, []).append(info)
+            if info.message in wanted:
+                self._by_message.setdefault(info.message, []).append(info)
         # Global selection across messages: (frame_id, signal_name) -> SignalInfo
         self._selected: dict[tuple[int, str], SignalInfo] = {}
 
@@ -405,7 +417,7 @@ class TraceSignalPlotDialog(QDialog):
         self.cmb_msg = QComboBox()
         self.cmb_msg.setFont(mono)
         self.cmb_msg.setEditable(False)
-        for msg, fid in dbc.list_messages():
+        for msg, fid in messages:
             self.cmb_msg.addItem(_msg_label(fid, msg), msg)
 
         self.cmb_sig = CheckableSignalCombo()
@@ -482,14 +494,20 @@ class TraceSignalPlotDialog(QDialog):
 
         self._on_message_changed()
         self._update_sel_chips()
-        if self._frames:
+        if not self._frames:
+            self.lbl_info.setText("No Trace frames — Open a log first.")
+        elif not messages:
             self.lbl_info.setText(
-                f"{len(self._frames)} Trace frames — open Signal dropdown and check "
-                f"items (max {_MAX_SERIES}). Switch Message to add more. "
-                f"Click a Selected chip to remove. Hover plot for V/H snap cursor."
+                f"{len(self._frames)} Trace frames, but none match this DBC — "
+                "nothing to plot."
             )
         else:
-            self.lbl_info.setText("No Trace frames — Open a log first.")
+            self.lbl_info.setText(
+                f"{len(self._frames)} Trace / {len(messages)} DBC message(s) — "
+                f"open Signal dropdown and check items (max {_MAX_SERIES}). "
+                f"Switch Message to add more. Click a Selected chip to remove. "
+                f"Hover plot for V/H snap cursor."
+            )
 
     def _current_message(self) -> str | None:
         msg = self.cmb_msg.currentData()

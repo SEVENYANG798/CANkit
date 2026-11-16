@@ -159,6 +159,63 @@ class WatchTableModel(QAbstractItemModel):
         self._rebuild()
         self.endResetModel()
 
+    def rebind_from_store(self, store) -> tuple[int, int]:
+        """Replace watch rows with fresh ``Variable`` objects from ``store``.
+
+        Matches by exact name, then case-insensitive, then normalized
+        (``_Foo`` ↔ ``Foo``). Keeps tags; drops stale samples. Returns
+        ``(updated, missing)``.
+        """
+        from xcp_pcan.symbols.elf_addr_map import normalize_symbol_name
+        from xcp_pcan.symbols.types import SymbolStore, Variable
+
+        if not isinstance(store, SymbolStore) or not self._vars:
+            return 0, 0
+        by_exact = store.by_name()
+        by_lower = {n.lower(): v for n, v in by_exact.items()}
+        by_norm: dict[str, Variable] = {}
+        for n, v in by_exact.items():
+            by_norm.setdefault(normalize_symbol_name(n).lower(), v)
+
+        updated = 0
+        missing = 0
+        new_vars: list[Variable] = []
+        new_tags: dict[str, str] = {}
+        for old in self._vars:
+            fresh = by_exact.get(old.name)
+            if fresh is None:
+                fresh = by_lower.get(old.name.lower())
+            if fresh is None:
+                fresh = by_norm.get(normalize_symbol_name(old.name).lower())
+            tag = self._tag_by_name.get(old.name, "")
+            if fresh is None:
+                missing += 1
+                new_vars.append(old)
+                if tag:
+                    new_tags[old.name] = tag
+                continue
+            if (
+                fresh.name != old.name
+                or fresh.address != old.address
+                or fresh.size != old.size
+                or fresh.datatype != old.datatype
+                or fresh.conversion != old.conversion
+            ):
+                updated += 1
+            new_vars.append(fresh)
+            if tag:
+                new_tags[fresh.name] = tag
+
+        if updated == 0 and missing == 0 and new_vars == self._vars:
+            return 0, 0
+        self.beginResetModel()
+        self._vars = new_vars
+        self._tag_by_name = new_tags
+        self._samples.clear()
+        self._rebuild()
+        self.endResetModel()
+        return updated, missing
+
     def update_sample(self, sample: PollSample) -> None:
         self._samples[sample.name] = sample
         node = self._var_nodes.get(sample.name)

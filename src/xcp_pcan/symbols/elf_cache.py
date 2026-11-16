@@ -12,7 +12,7 @@ from xcp_pcan.symbols.types import SymbolStore
 logger = logging.getLogger(__name__)
 
 _CACHE_DIR = Path.home() / ".xcp_pcan" / "elf_cache"
-_CACHE_VERSION = 1
+_CACHE_VERSION = 2  # load_elf skips full DWARF size walk by default
 
 
 def _file_fingerprint(path: Path) -> tuple[str, int, int]:

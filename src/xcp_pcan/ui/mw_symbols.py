@@ -163,6 +163,10 @@ class SymbolToolsMixin:
         if self._symbol_groups and load_mode == "replace" and not restoring:
             matched, missing = self._add_symbol_groups_to_watch()
             self._set_list_status(matched, missing)
+        # Watch rows hold Variable snapshots — refresh addresses/sizes from the
+        # new store so Poll/DAQ keep working without re-adding from the left.
+        if not restoring:
+            self._rebind_watches_from_store()
         self._append_log(summary)
         self.statusBar().showMessage(
             f"Symbols: {Path(self._store.source_path).name} ({len(self._store.variables)})",
@@ -227,7 +231,6 @@ class SymbolToolsMixin:
             path,
             apply_transport=False,
             mode="overlay_elf",
-            on_done=lambda: (self._filter_symbols(), self._sync_poller_vars()),
         )
 
     @Slot()
