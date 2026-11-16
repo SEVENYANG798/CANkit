@@ -6,14 +6,13 @@ import json
 import re
 from collections.abc import Callable
 
-from PySide6.QtCore import QRect, QSize, Qt, QTimer
+from PySide6.QtCore import QRect, QSettings, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QFrame,
     QHBoxLayout,
-    QHeaderView,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -23,6 +22,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from xcp_pcan.ui.column_layout import PersistedColumnWidths
 
 _VISIBLE_TX_ROWS = 2
 _TX_ROW_HEIGHT = 28
@@ -126,6 +127,7 @@ class TraceTxPanel(QWidget):
         self,
         *,
         transport_getter: Callable[[], CanBusTransport | None],
+        settings: QSettings | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -169,17 +171,13 @@ class TraceTxPanel(QWidget):
         )
         hdr = self._table.horizontalHeader()
         hdr.setHighlightSections(False)
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        hdr.setStretchLastSection(False)
-        self._table.setColumnWidth(_COL_ID, 80)
-        self._table.setColumnWidth(_COL_LEN, 48)
-        self._table.setColumnWidth(_COL_DATA, 280)
-        self._table.setColumnWidth(_COL_PERIOD, 80)
-        self._table.setColumnWidth(_COL_FD, 44)
-        self._table.setColumnWidth(_COL_EXT, 44)
-        self._table.setColumnWidth(_COL_CYCLE, 52)
-        self._table.setColumnWidth(_COL_SEND, 64)
-        hdr.setSectionResizeMode(_COL_DATA, QHeaderView.ResizeMode.Stretch)
+        PersistedColumnWidths(
+            settings,
+            "trace_viewer/tx_col_widths",
+            (80, 48, 280, 80, 44, 44, 52, 64),
+            stretch_cols=(_COL_DATA,),
+            parent=self,
+        ).attach(self._table)
         # Viewport shows 2 rows; extra TX rows scroll inside the table.
         header_h = max(hdr.sizeHint().height(), 24)
         body_h = _VISIBLE_TX_ROWS * _TX_ROW_HEIGHT + 4

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -163,6 +164,31 @@ def default_project_dir() -> Path:
 
 def default_project_path() -> Path:
     return default_project_dir() / DEFAULT_PROJECT_NAME
+
+
+def bundled_factory_project_path() -> Path | None:
+    """Packaged / source-tree factory ``default.xcpp`` (developer ship defaults)."""
+    from xcp_pcan.resources import resource_dir
+
+    path = resource_dir() / DEFAULT_PROJECT_NAME
+    return path if path.is_file() else None
+
+
+def ensure_user_default_project() -> Path:
+    """If the user has no ``default.xcpp`` yet, copy the factory bundle once.
+
+    Later edits stay in ``%USERPROFILE%\\.xcp_pcan\\default.xcpp`` and are never
+    overwritten by the packaged factory file.
+    """
+    dest = default_project_path()
+    if dest.is_file():
+        return dest
+    src = bundled_factory_project_path()
+    if src is None:
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+    return dest
 
 
 def save_project(path: str | Path, project: ProjectFile) -> None:

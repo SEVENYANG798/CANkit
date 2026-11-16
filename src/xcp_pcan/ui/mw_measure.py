@@ -179,9 +179,14 @@ class MeasureMixin:
         # Replace — keeping old untagged rows would bury the group headers.
         model.clear()
         model.add_variables(items)
+        # Collapse by default: only expanded groups are acquired on Start.
+        self.watch.fold_active_watch(True)
         self._sync_poller_vars()
         tab = "DAQ" if model is self._daq_watch_model else "Polling"
-        self._append_log(f"Watch {tab}: {len(items)} symbol(s) in {len(self._symbol_groups)} tag(s)")
+        self._append_log(
+            f"Watch {tab}: {len(items)} symbol(s) in {len(self._symbol_groups)} tag(s) "
+            "(collapsed — expand a group to acquire it)"
+        )
         return len(items), missing
 
     def _active_watch_model(self) -> WatchTableModel:
@@ -189,6 +194,9 @@ class MeasureMixin:
 
     def _add_variables_to_watch(self, variables: list) -> None:
         model = self._active_watch_model()
+        if model is self._daq_watch_model and self._daq.is_running:
+            self._stop_daq()
+            self._append_log("DAQ stopped — watch list changed; Start DAQ again.")
         items: list[tuple] = []
         for entry in variables:
             if isinstance(entry, tuple):
@@ -229,6 +237,11 @@ class MeasureMixin:
                 if var.name not in seen:
                     seen.add(var.name)
                     picked.append(var)
+        if not picked:
+            return
+        if model is self._daq_watch_model and self._daq.is_running:
+            self._stop_daq()
+            self._append_log("DAQ stopped — watch list changed; Start DAQ again.")
         model.remove_variables(picked)
         if model is self._poll_watch_model:
             self._sync_poller_vars()
@@ -247,7 +260,8 @@ class MeasureMixin:
         self._daq_traces.clear()
 
     def _sync_poller_vars(self) -> None:
-        self._poller.set_variables(self._poll_watch_model.variables())
+        # While polling, only expanded groups (+ untagged rows) are read.
+        self._poller.set_variables(self.watch.acquire_variables(daq=False))
 
     def _rebind_watches_from_store(self) -> tuple[int, int]:
         """Refresh Poll/DAQ watch addresses after A2L/ELF reload."""
@@ -266,7 +280,33 @@ class MeasureMixin:
             )
         return updated, missing
 
-    def _record_sample(self, buffer: TraceBuffer, sample: PollSample) -> None:
+    def _selected_plot_names(self, model: WatchTableModel, table) -> list[str]:
+        """Variable names under the current watch selection (signals or list groups)."""
+        picked: list[str] = []
+        seen: set[str] = set()
+        sm = table.selectionModel()
+        if sm is None:
+            return picked
+        for index in sm.selectedRows():
+            for var in model.variables_under(index):
+                if var.name not in seen:
+                    seen.add(var.name)
+                    picked.append(var.name)
+        return picked
+
+    def _record_sample(
+        self,
+        buffer: TraceBuffer,
+        sample: PollSample,
+        *,
+        allowed: set[str],
+        chart: CurveChartDialog | None,
+    ) -> None:
+        # Default: no curve buffer. Only record while Graphic is open for selected names.
+        if not allowed or chart is None or not chart.isVisible():
+            return
+        if sample.name not in allowed:
+            return
         if sample.error or sample.physical is None:
             return
         if isinstance(sample.physical, (int, float)):
@@ -275,45 +315,64 @@ class MeasureMixin:
             )
 
     def _open_poll_chart(self) -> None:
-        if self._poll_chart is None:
-            self._poll_chart = CurveChartDialog(
-                self._poll_traces, title="Polling curves", parent=self._dialog_parent())
-        self._poll_chart.set_monitoring(self._poller.is_running)
-        self._poll_chart.sync_series_list()
-        raise_window(self._poll_chart)
+        self._open_watch_graphic(daq=False)
 
     def _open_daq_chart(self) -> None:
-        if self._daq_chart is None:
-            self._daq_chart = CurveChartDialog(
-                self._daq_traces, title="DAQ curves", parent=self._dialog_parent())
-        self._daq_chart.set_monitoring(self._daq.is_running)
-        self._daq_chart.sync_series_list()
-        raise_window(self._daq_chart)
+        self._open_watch_graphic(daq=True)
 
-    def _export_csv(self, buffer: TraceBuffer, label: str) -> None:
-        if buffer.point_count() == 0:
-            QMessageBox.information(self._dialog_parent(),
-                "No samples",
-                f"No {label} samples buffered yet. Start poll/DAQ and wait for values.",
+    def _open_watch_graphic(self, *, daq: bool) -> None:
+        """Add selected signals to the single shared Graphic window (no new window)."""
+        model = self._daq_watch_model if daq else self._poll_watch_model
+        table = self.watch.tbl_daq if daq else self.watch.tbl_poll
+        names = self._selected_plot_names(model, table)
+        if not names:
+            QMessageBox.information(
+                self._dialog_parent(),
+                "No selection",
+                "Select one or more signals (or a list group), then right-click → Graphic.",
             )
             return
-        start = str(self._settings.value("ui_export_dir", "") or "")
-        path, _ = QFileDialog.getSaveFileName(self._dialog_parent(),
-            f"Export {label} CSV",
-            start,
-            "CSV (*.csv);;All (*.*)",
-        )
-        if not path:
-            return
-        if not path.lower().endswith(".csv"):
-            path += ".csv"
-        try:
-            rows = buffer.export_csv(Path(path))
-            self._settings.setValue("ui_export_dir", str(Path(path).parent))
-            self._append_log(f"Exported {rows} {label} sample(s) → {path}")
-            self.statusBar().showMessage(f"Exported {rows} rows", 4000)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self._dialog_parent(), "Export failed", str(exc))
+        if daq:
+            before = set(self._daq_plot_names)
+            self._daq_plot_names |= set(names)
+            chart = self._daq_chart
+            if chart is None:
+                chart = CurveChartDialog(
+                    self._daq_traces,
+                    title="Graphic",
+                    parent=self._dialog_parent(),
+                )
+                self._daq_chart = chart
+            chart.set_monitoring(self._daq.is_running)
+            kind = "DAQ"
+            added = sorted(set(names) - before)
+            total = len(self._daq_plot_names)
+        else:
+            before = set(self._poll_plot_names)
+            self._poll_plot_names |= set(names)
+            chart = self._poll_chart
+            if chart is None:
+                chart = CurveChartDialog(
+                    self._poll_traces,
+                    title="Graphic",
+                    parent=self._dialog_parent(),
+                )
+                self._poll_chart = chart
+            chart.set_monitoring(self._poller.is_running)
+            kind = "Polling"
+            added = sorted(set(names) - before)
+            total = len(self._poll_plot_names)
+        chart.setWindowTitle("Graphic")
+        chart.sync_series_list()
+        raise_window(chart)
+        if added:
+            self._append_log(
+                f"Graphic: added {len(added)} {kind} signal(s) "
+                f"({', '.join(added[:5])}{'…' if len(added) > 5 else ''}); "
+                f"now {total} series"
+            )
+        else:
+            self._append_log(f"Graphic: {kind} selection already plotted ({total} series)")
 
     @Slot(int)
     def _on_tab_changed(self, index: int) -> None:
@@ -332,17 +391,99 @@ class MeasureMixin:
         if not self._poll_watch_model.variables():
             QMessageBox.information(self._dialog_parent(), "Empty watch", "Add variables on the Polling tab.")
             return
+        if not self.watch.acquire_variables(daq=False):
+            QMessageBox.information(
+                self._dialog_parent(),
+                "Nothing to poll",
+                "Expand at least one list group (right-click → Expand all, or click a group).\n"
+                "Collapsed groups are not acquired and do not use the bus.",
+            )
+            return
         self._ensure_xcp_then(self._start_poll_impl)
 
+    def _handle_zero_address_watch(
+        self,
+        model: WatchTableModel,
+        *,
+        kind: str,
+        variables: list | None = None,
+    ) -> bool:
+        """Offer remove / resolve-from-ELF / cancel. Return True if start must abort."""
+        check = list(variables) if variables is not None else model.variables()
+        bad = [v for v in check if getattr(v, "address", 0) == 0]
+        if not bad:
+            return False
+        names = [v.name for v in bad]
+        preview = "\n".join(names[:12])
+        more = f"\n… and {len(names) - 12} more" if len(names) > 12 else ""
+        box = QMessageBox(self._dialog_parent())
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(f"Cannot start {kind}")
+        box.setText(
+            f"{len(bad)} symbol(s) have address 0.\n\n{preview}{more}"
+        )
+        box.setInformativeText(
+            "Remove them from the watch and continue, resolve addresses from an ELF, "
+            "or cancel."
+        )
+        btn_remove = box.addButton(
+            "Remove from watch", QMessageBox.ButtonRole.AcceptRole
+        )
+        btn_resolve = box.addButton(
+            "Resolve from ELF", QMessageBox.ButtonRole.ActionRole
+        )
+        btn_cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(btn_cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_remove:
+            model.remove_variables(bad)
+            if model is self._poll_watch_model:
+                self._sync_poller_vars()
+            self._append_log(
+                f"Removed {len(bad)} zero-address symbol(s) from {kind} watch"
+            )
+            if not model.variables():
+                QMessageBox.information(
+                    self._dialog_parent(),
+                    f"Cannot start {kind}",
+                    "Watch is empty after removing address-0 symbols.",
+                )
+                return True
+            return False
+        if clicked is btn_resolve:
+            self._append_log(
+                f"{kind} start deferred — resolve address-0 symbols from ELF, then Start again"
+            )
+            self._resolve_from_elf()
+            return True
+        return True
+
     def _start_poll_impl(self) -> None:
+        vars_ = self.watch.acquire_variables(daq=False)
+        if self._handle_zero_address_watch(
+            self._poll_watch_model, kind="Polling", variables=vars_
+        ):
+            return
+        vars_ = self.watch.acquire_variables(daq=False)
+        if not vars_:
+            QMessageBox.information(
+                self._dialog_parent(),
+                "Nothing to poll",
+                "No expanded symbols left to poll.",
+            )
+            return
         self._poller.set_interval_ms(self.watch.spn_poll.value())
-        self._sync_poller_vars()
+        self._poller.set_variables(vars_)
         try:
             self._poller.start()
             self._refresh_link_ui()
             if self._poll_chart is not None:
                 self._poll_chart.set_monitoring(True)
-            self._append_log(f"Poll started @ {self.watch.spn_poll.value()} ms")
+            self._append_log(
+                f"Poll started @ {self.watch.spn_poll.value()} ms "
+                f"({len(vars_)} symbol(s); collapsed groups skipped)"
+            )
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self._dialog_parent(), "Poll failed", str(exc))
 
@@ -365,6 +506,14 @@ class MeasureMixin:
         if not self._daq_watch_model.variables():
             QMessageBox.information(self._dialog_parent(), "Empty watch", "Add variables on the DAQ tab.")
             return
+        if not self.watch.acquire_variables(daq=True):
+            QMessageBox.information(
+                self._dialog_parent(),
+                "Nothing to acquire",
+                "Expand at least one list group (right-click → Expand all, or click a group).\n"
+                "Collapsed groups are not acquired and do not use the bus.",
+            )
+            return
         if self._diag_uds_rx_overlaps_xcp_slave():
             QMessageBox.warning(self._dialog_parent(),
                 "CAN ID overlap",
@@ -378,7 +527,11 @@ class MeasureMixin:
     def _diag_uds_rx_overlaps_xcp_slave(self) -> bool:
         """True when Diag Resp ID == XCP slave ID (shared RX corrupts DAQ/UDS)."""
         diag = getattr(self, "_diag_console", None)
-        if diag is None or not diag.isVisible():
+        if diag is None:
+            return False
+        # Visible OR mid-request — hidden-but-busy still shares the RX ID.
+        busy = bool(getattr(diag, "_busy", False))
+        if not diag.isVisible() and not busy:
             return False
         try:
             xcp_rx = parse_can_id(self.connection.collect_connection().slave_can_id)
@@ -387,9 +540,19 @@ class MeasureMixin:
             return False
         return xcp_rx == diag_rx
 
-    def _start_daq_impl(self) -> None:
-        vars_ = self._daq_watch_model.variables()
+    def _start_daq_impl(self, *, _retried: bool = False) -> None:
+        vars_ = self.watch.acquire_variables(daq=True)
+        if self._handle_zero_address_watch(
+            self._daq_watch_model, kind="DAQ", variables=vars_
+        ):
+            return
+        vars_ = self.watch.acquire_variables(daq=True)
         if not vars_:
+            QMessageBox.information(
+                self._dialog_parent(),
+                "Nothing to acquire",
+                "No expanded symbols left for DAQ.",
+            )
             return
         self._apply_daq_timeout_from_ui()
         try:
@@ -409,11 +572,30 @@ class MeasureMixin:
             )
             res = self.connection.collect_resilience()
             self._append_log(
-                f"DAQ started — {len(layout.odts)} ODT(s), "
+                f"DAQ started — {len(vars_)} symbol(s), {len(layout.odts)} ODT(s), "
                 f"event={self.watch.spn_event.value()}, "
                 f"id_type={layout.identification_field_type}{ts_note}, "
-                f"dto_silence={res.daq_dto_timeout_ms}ms"
+                f"dto_silence={res.daq_dto_timeout_ms}ms "
+                "(collapsed groups skipped)"
             )
+        except TimeoutError as exc:
+            logger.exception("DAQ start failed")
+            try:
+                self._daq.stop()
+            except Exception:  # noqa: BLE001
+                logger.debug("DAQ stop after start failure failed", exc_info=True)
+            self._master.mark_session_lost()
+            self._refresh_link_ui()
+            if not _retried and self._transport.is_open:
+                self._append_log(
+                    "XCP session dead during DAQ setup — CONNECT again and retry…"
+                )
+                self._ensure_xcp_then(
+                    lambda: self._start_daq_impl(_retried=True)
+                )
+                return
+            QMessageBox.critical(self._dialog_parent(), "DAQ failed", str(exc))
+            self._append_log(f"DAQ ERROR: {exc}")
         except Exception as exc:  # noqa: BLE001
             logger.exception("DAQ start failed")
             QMessageBox.critical(self._dialog_parent(), "DAQ failed", str(exc))
@@ -422,6 +604,7 @@ class MeasureMixin:
                 self._daq.stop()
             except Exception:  # noqa: BLE001
                 logger.debug("DAQ stop after start failure failed", exc_info=True)
+            self._master.mark_session_lost()
             self._refresh_link_ui()
 
     @Slot()
@@ -540,13 +723,23 @@ class MeasureMixin:
     def _on_poll_sample(self, sample: object) -> None:
         if isinstance(sample, PollSample):
             self._poll_watch_model.update_sample(sample)
-            self._record_sample(self._poll_traces, sample)
+            self._record_sample(
+                self._poll_traces,
+                sample,
+                allowed=self._poll_plot_names,
+                chart=self._poll_chart,
+            )
 
     @Slot(object)
     def _on_daq_sample(self, sample: object) -> None:
         if isinstance(sample, PollSample):
             self._daq_watch_model.update_sample(sample)
-            self._record_sample(self._daq_traces, sample)
+            self._record_sample(
+                self._daq_traces,
+                sample,
+                allowed=self._daq_plot_names,
+                chart=self._daq_chart,
+            )
 
     @Slot(str)
     def _on_error(self, message: str) -> None:

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QEvent, QPointF, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRect, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
     QSplitter,
@@ -23,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from xcp_pcan.trace_log.dbc_decode import DbcDatabase, SignalInfo, SignalSample
 from xcp_pcan.trace_log.types import TraceFrame
+from xcp_pcan.ui.column_layout import PersistedColumnWidths
 from xcp_pcan.ui.window_util import configure_tool_window
 
 _PALETTE = (
@@ -387,14 +387,17 @@ class TraceSignalPlotDialog(QDialog):
         self,
         dbc: DbcDatabase,
         frames: list[TraceFrame],
+        settings: QSettings | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Graphic")
+        # Distinct from XCP Viewer watch "Graphic" (DAQ/Polling curves).
+        self.setWindowTitle("Trace Graphic")
         self.resize(900, 600)
         configure_tool_window(self)
         self._dbc = dbc
         self._frames = list(frames)
+        self._settings = settings
         # Only IDs that both appear in this Trace and exist in the DBC.
         appeared = {
             int(fr.arbitration_id) & _ID_MASK
@@ -468,11 +471,13 @@ class TraceSignalPlotDialog(QDialog):
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(22)
-        hh = self._table.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        PersistedColumnWidths(
+            self._settings,
+            "trace_viewer/graphic_col_widths",
+            (80, 200, 80, 64),
+            stretch_cols=(1,),
+            parent=self,
+        ).attach(self._table)
 
         split = QSplitter(Qt.Orientation.Vertical)
         split.addWidget(self._curve)

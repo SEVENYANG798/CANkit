@@ -7,7 +7,18 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QPoint, QPointF, QRectF, QSettings, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    QByteArray,
+    QObject,
+    QPoint,
+    QPointF,
+    QRectF,
+    QSettings,
+    Qt,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -41,6 +52,7 @@ from xcp_pcan.can.transport import CanBusTransport
 from xcp_pcan.trace_log.dbc_decode import DbcDatabase
 from xcp_pcan.trace_log.types import TraceFrame
 from xcp_pcan.trace_log.writers import save_trace, sniff_save_format
+from xcp_pcan.ui.column_layout import apply_column_widths
 from xcp_pcan.ui.trace_signal_plot_dialog import TraceSignalPlotDialog
 from xcp_pcan.ui.trace_tx_panel import TraceTxPanel
 from xcp_pcan.ui.trace_viewer_model import TraceViewerModel
@@ -48,6 +60,10 @@ from xcp_pcan.ui.trace_viewer_worker import TraceLoadWorker
 from xcp_pcan.ui.window_util import raise_window
 
 logger = logging.getLogger(__name__)
+
+# Fallback widths when no QHeaderView state is stored yet.
+_TRACE_WIDTHS_TIMELINE = (44, 72, 80, 40, 48, 56, 280, 160)
+_TRACE_WIDTHS_COLLAPSED = (44, 80, 40, 48, 56, 280, 72, 56, 160)
 
 
 def _fmt_id(arb: int) -> str:
@@ -168,7 +184,8 @@ class TraceViewerDialog(QWidget):
             self._queue_live_frame, Qt.ConnectionType.QueuedConnection
         )
         self._live_flush = QTimer(self)
-        self._live_flush.setInterval(50)
+        # 50ms was chatty under bus load; 100ms keeps UI clickable.
+        self._live_flush.setInterval(100)
         self._live_flush.timeout.connect(self._flush_live_frames)
 
         self._model = TraceViewerModel(self)
@@ -189,8 +206,15 @@ class TraceViewerDialog(QWidget):
         self._table.horizontalHeader().setStretchLastSection(False)
         self._table.selectionModel().selectionChanged.connect(self._on_selection)
         self._table.horizontalHeader().sectionClicked.connect(self._on_header_clicked)
+        self._table.horizontalHeader().sectionResized.connect(self._on_column_resized)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_table_context_menu)
+        self._applying_col_widths = False
+        # Debounced header save — Stretch reflow must not overwrite user widths.
+        self._header_save_timer = QTimer(self)
+        self._header_save_timer.setSingleShot(True)
+        self._header_save_timer.setInterval(300)
+        self._header_save_timer.timeout.connect(self._save_header_state)
 
         self._detail = QTextEdit()
         self._detail.setReadOnly(True)
@@ -317,7 +341,11 @@ class TraceViewerDialog(QWidget):
         upper_lay.addWidget(self._table, stretch=1)
         upper_lay.addWidget(self._detail)
 
-        self._tx_panel = TraceTxPanel(transport_getter=lambda: self._transport, parent=self)
+        self._tx_panel = TraceTxPanel(
+            transport_getter=lambda: self._transport,
+            settings=self._settings,
+            parent=self,
+        )
         self._tx_panel.restore_from_settings(self._settings)
         # 2-row TX table (right-click Add/Remove); more rows scroll inside.
         self._tx_panel.setMinimumHeight(86)
@@ -351,8 +379,12 @@ class TraceViewerDialog(QWidget):
             self.act_collapse.blockSignals(True)
             self.act_collapse.setChecked(True)
             self.act_collapse.blockSignals(False)
-            self._model.set_collapsed(True)
-            self.act_collapse.setText("Expand timeline")
+            self._applying_col_widths = True
+            try:
+                self._model.set_collapsed(True)
+                self.act_collapse.setText("Expand timeline")
+            finally:
+                self._applying_col_widths = False
             self._apply_column_widths()
 
         # Defer last-DBC restore so the window can paint before cantools parses
@@ -557,6 +589,7 @@ class TraceViewerDialog(QWidget):
         self._tx_panel.save_to_settings(self._settings)
         self._settings.setValue("trace_viewer/splitter", self._splitter.sizes())
         self._settings.setValue("trace_viewer/collapsed", self._model.is_collapsed())
+        self._save_header_state(self._model.is_collapsed())
 
     def menu_actions(self) -> list[QAction]:
         """Actions for the main-window CAN menu (Trace tools)."""
@@ -571,51 +604,107 @@ class TraceViewerDialog(QWidget):
             self.act_detail,
         ]
 
-    def _apply_column_widths(self) -> None:
-        """Data stretches; other columns size to header text (PCAN-like default)."""
+    @staticmethod
+    def _header_state_key(collapsed: bool) -> str:
+        # QHeaderView.saveState blob — separate from the old int-list keys.
+        if collapsed:
+            return "trace_viewer/header_state_collapsed"
+        return "trace_viewer/header_state_timeline"
+
+    @staticmethod
+    def _trace_widths_defaults(collapsed: bool) -> tuple[int, ...]:
+        if collapsed:
+            return _TRACE_WIDTHS_COLLAPSED
+        return _TRACE_WIDTHS_TIMELINE
+
+    def _stretch_column(self) -> int:
+        """Last visible column fills the viewport to the right edge."""
+        if self._model.has_dbc_names():
+            return self._model.name_column()
+        return self._model.data_column()
+
+    def _save_header_state(self, collapsed: bool | None = None) -> None:
+        """Write concrete column sizes to QSettings (survives app restart)."""
+        if self._applying_col_widths:
+            return
+        collapsed = self._model.is_collapsed() if collapsed is None else bool(collapsed)
+        expected = len(self._trace_widths_defaults(collapsed))
+        if self._model.columnCount() != expected:
+            return
         hdr = self._table.horizontalHeader()
-        hdr.setStretchLastSection(False)
-        # Collapsed/Timeline: Dir before Type; Name hidden without DBC.
-        data_col = self._model.data_column()
+        self._applying_col_widths = True
+        blocked = hdr.blockSignals(True)
+        try:
+            # Stretch sizes are layout-dependent — freeze to Interactive first.
+            for col in range(self._model.columnCount()):
+                hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+            self._settings.setValue(
+                self._header_state_key(collapsed), hdr.saveState()
+            )
+            self._settings.sync()
+        finally:
+            hdr.blockSignals(blocked)
+            self._applying_col_widths = False
+        self._apply_stretch_only()
+
+    def _apply_stretch_only(self) -> None:
+        hdr = self._table.horizontalHeader()
+        stretch = self._stretch_column()
+        blocked = hdr.blockSignals(True)
+        try:
+            for col in range(self._model.columnCount()):
+                mode = (
+                    QHeaderView.ResizeMode.Stretch
+                    if col == stretch
+                    else QHeaderView.ResizeMode.Interactive
+                )
+                hdr.setSectionResizeMode(col, mode)
+        finally:
+            hdr.blockSignals(blocked)
+
+    def _apply_column_widths(self) -> None:
+        """Restore QHeaderView state from QSettings; stretch last visible column."""
+        collapsed = self._model.is_collapsed()
         name_col = self._model.name_column()
         show_name = self._model.has_dbc_names()
-        # Mode switch changes Name index — clear leftover hide flags first.
-        for col in range(self._model.columnCount()):
-            self._table.setColumnHidden(col, False)
-        self._table.setColumnHidden(name_col, not show_name)
-        fm = self._table.fontMetrics()
-        # Fit names already seen in the buffer — not the longest name in the whole DBC.
-        longest_name = self._model.longest_appeared_dbc_name() if show_name else ""
-        for col in range(self._model.columnCount()):
-            if col == name_col and not show_name:
-                continue
-            if col == data_col:
-                hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
-                continue
-            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-            title = self._model.headerData(
-                col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole
-            )
-            text = str(title) if title is not None else ""
-            # Padding for ▾ filter affordance / cell margins; keep narrow cols readable.
-            width = max(36, fm.horizontalAdvance(text) + 24)
-            if col == 0:
-                width = max(width, 40)
-            if col == name_col and longest_name:
-                width = max(width, fm.horizontalAdvance(longest_name) + 28)
-            self._table.setColumnWidth(col, width)
+        hdr = self._table.horizontalHeader()
+        self._applying_col_widths = True
+        self._header_save_timer.stop()
+        blocked = hdr.blockSignals(True)
+        try:
+            for col in range(self._model.columnCount()):
+                self._table.setColumnHidden(col, False)
+            raw = self._settings.value(self._header_state_key(collapsed))
+            restored = False
+            if isinstance(raw, QByteArray) and not raw.isEmpty():
+                restored = bool(hdr.restoreState(raw))
+            if not restored:
+                apply_column_widths(
+                    self._table,
+                    list(self._trace_widths_defaults(collapsed)),
+                    stretch_cols=(),
+                )
+            self._table.setColumnHidden(name_col, not show_name)
+            stretch = self._stretch_column()
+            for col in range(self._model.columnCount()):
+                mode = (
+                    QHeaderView.ResizeMode.Stretch
+                    if col == stretch
+                    else QHeaderView.ResizeMode.Interactive
+                )
+                hdr.setSectionResizeMode(col, mode)
+        finally:
+            hdr.blockSignals(blocked)
+            # Let Qt finish Stretch layout before accepting user resize saves.
+            QTimer.singleShot(50, self._end_column_apply)
 
-    def _maybe_widen_name_column(self) -> None:
-        """Grow Name column when a longer appeared DBC name shows up (live / load)."""
-        name_col = self._model.name_column()
-        if self._table.isColumnHidden(name_col):
+    def _end_column_apply(self) -> None:
+        self._applying_col_widths = False
+
+    def _on_column_resized(self, _logical: int, _old: int, _new: int) -> None:
+        if self._applying_col_widths:
             return
-        longest = self._model.longest_appeared_dbc_name()
-        if not longest:
-            return
-        need = self._table.fontMetrics().horizontalAdvance(longest) + 28
-        if need > self._table.columnWidth(name_col):
-            self._table.setColumnWidth(name_col, need)
+        self._header_save_timer.start()
 
     def _on_auto_scroll_toggled(self, enabled: bool) -> None:
         self._auto_scroll = bool(enabled)
@@ -650,12 +739,23 @@ class TraceViewerDialog(QWidget):
             bar = self._table.verticalScrollBar()
             bar.setValue(bar.maximum())
 
-        _go()
+        # One deferred scroll — sync + deferred double-scroll jammed the event loop.
         QTimer.singleShot(0, _go)
 
     def _on_collapse_toggled(self, collapsed: bool) -> None:
-        self._model.set_collapsed(collapsed)
-        self.act_collapse.setText("Expand timeline" if collapsed else "Collapse by ID")
+        # Save the mode we are leaving first (timeline vs collapsed differ).
+        was_collapsed = self._model.is_collapsed()
+        if was_collapsed != bool(collapsed):
+            self._header_save_timer.stop()
+            self._save_header_state(was_collapsed)
+        self._applying_col_widths = True
+        try:
+            self._model.set_collapsed(collapsed)
+            self.act_collapse.setText(
+                "Expand timeline" if collapsed else "Collapse by ID"
+            )
+        finally:
+            self._applying_col_widths = False
         self._apply_column_widths()
         if not collapsed:
             self._ensure_timeline_auto_scroll()
@@ -840,7 +940,7 @@ class TraceViewerDialog(QWidget):
     def _open_signal_plot(self) -> None:
         if self._dbc is None:
             QMessageBox.information(
-                self, self._title(), "Load a DBC first, then open Graphic."
+                self, self._title(), "Load a DBC first, then open Trace Graphic."
             )
             return
         # configure_tool_window() clears the Qt parent — must keep a Python ref
@@ -849,7 +949,9 @@ class TraceViewerDialog(QWidget):
         old = self._signal_plot_dialog
         if old is not None:
             old.close()
-        dlg = TraceSignalPlotDialog(self._dbc, frames, parent=self)
+        dlg = TraceSignalPlotDialog(
+            self._dbc, frames, settings=self._settings, parent=self
+        )
         self._signal_plot_dialog = dlg
         raise_window(dlg)
 
@@ -1023,11 +1125,13 @@ class TraceViewerDialog(QWidget):
                 )
             )
             self._live_index += 1
+        had_err = any(fr.is_error for fr in out)
         self._model.append_live_batch(out)
-        self._maybe_widen_name_column()
         if self._auto_scroll and not self._model.is_collapsed():
             self._scroll_trace_to_bottom()
-        self._refresh_status()
+        # Skip error-scan on every flush unless this batch had errors / drops.
+        if had_err or self._live_dropped:
+            self._refresh_status()
 
     def load_path(self, path: str) -> None:
         if self._live:
@@ -1092,11 +1196,16 @@ class TraceViewerDialog(QWidget):
             # Large timeline freezes the view; collapse-by-ID stays usable (PCAN Receive style).
             large = len(frames) >= 80_000
             if large and not self._model.is_collapsed():
+                self._save_header_state(False)
                 self.act_collapse.blockSignals(True)
                 self.act_collapse.setChecked(True)
                 self.act_collapse.blockSignals(False)
-                self._model.set_collapsed(True)
-                self.act_collapse.setText("Expand timeline")
+                self._applying_col_widths = True
+                try:
+                    self._model.set_collapsed(True)
+                    self.act_collapse.setText("Expand timeline")
+                finally:
+                    self._applying_col_widths = False
             self._model.set_frames(frames)
             if self._dbc is not None:
                 self._model.set_dbc_names(self._dbc.message_names())

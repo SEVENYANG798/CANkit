@@ -3,7 +3,40 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QWidget
+
+
+def copy_selected_rows(view: QAbstractItemView) -> bool:
+    """Copy selected rows as tab-separated text (TSV). Returns True if copied."""
+    model = view.model()
+    sm = view.selectionModel()
+    if model is None or sm is None:
+        return False
+    lines: list[str] = []
+    for row_index in sm.selectedRows(0):
+        parent = row_index.parent()
+        cells: list[str] = []
+        for col in range(model.columnCount(parent)):
+            cell = model.index(row_index.row(), col, parent)
+            value = model.data(cell, Qt.ItemDataRole.DisplayRole)
+            cells.append("" if value is None else str(value))
+        lines.append("\t".join(cells))
+    if not lines:
+        return False
+    clipboard = QApplication.clipboard()
+    if clipboard is None:
+        return False
+    clipboard.setText("\n".join(lines))
+    return True
+
+
+def bind_copy_shortcut(view: QAbstractItemView) -> QShortcut:
+    """Ctrl+C copies the current row selection on ``view``."""
+    shortcut = QShortcut(QKeySequence.StandardKey.Copy, view)
+    shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+    shortcut.activated.connect(lambda: copy_selected_rows(view))
+    return shortcut
 
 
 def dialog_parent(fallback: QWidget | None = None) -> QWidget | None:

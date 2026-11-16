@@ -85,6 +85,11 @@ class CurveChartDialog(QDialog):
         self.btn_fit.clicked.connect(self._auto_fit)
         self.btn_clear = QPushButton("Clear data")
         self.btn_clear.clicked.connect(self._clear_data)
+        self.btn_export = QPushButton("Export CSV")
+        self.btn_export.setToolTip(
+            "Export buffered samples (time_s / timestamp / name / value / unit)."
+        )
+        self.btn_export.clicked.connect(self._export_csv)
         self.btn_save = QPushButton("Save chart")
         self.btn_save.clicked.connect(self._save_chart)
         self.btn_refresh_list = QPushButton("Refresh series")
@@ -92,6 +97,7 @@ class CurveChartDialog(QDialog):
         ctrl.addWidget(self.btn_pause)
         ctrl.addWidget(self.btn_fit)
         ctrl.addWidget(self.btn_clear)
+        ctrl.addWidget(self.btn_export)
         ctrl.addWidget(self.btn_save)
         ctrl.addWidget(self.btn_refresh_list)
         ctrl.addStretch()
@@ -115,6 +121,7 @@ class CurveChartDialog(QDialog):
 
     def _update_save_enabled(self) -> None:
         has_data = bool(self._buffer.names())
+        self.btn_export.setEnabled(has_data)
         # Enabled when not monitoring, or always if user paused chart — user asked
         # save after pause/stop monitoring; keep enabled when stopped or chart paused.
         self.btn_save.setEnabled(has_data and (not self._monitoring or self._paused))
@@ -199,6 +206,33 @@ class CurveChartDialog(QDialog):
         self._apply_visibility()
         self._update_save_enabled()
         self._update_status()
+
+    def _export_csv(self) -> None:
+        if self._buffer.point_count() == 0:
+            QMessageBox.information(
+                self,
+                "No samples",
+                "No curve samples yet. Keep Graphic open while Poll/DAQ is running.",
+            )
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export CSV",
+            "xcp_graphic.csv",
+            "CSV (*.csv);;All (*.*)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        try:
+            n = self._buffer.export_csv(Path(path))
+        except OSError as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+        QMessageBox.information(
+            self, "Exported", f"Exported {n} sample(s) to:\n{path}"
+        )
 
     def _on_tick(self) -> None:
         # Keep checkbox list in sync when new symbols appear

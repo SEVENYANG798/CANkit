@@ -59,6 +59,21 @@ Remove-TreeIfExists $WorkRoot
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 New-Item -ItemType Directory -Path $WorkRoot -Force | Out-Null
 
+# Factory project defaults: ship the developer's current ~/.xcp_pcan/default.xcpp
+# so first-run users get those connection / watch settings. Users then edit their
+# own copy under %USERPROFILE%\.xcp_pcan\ (never overwritten by the factory file).
+$FactoryXcpp = Join-Path $Root "src\xcp_pcan\resources\default.xcpp"
+$UserXcpp = Join-Path $env:USERPROFILE ".xcp_pcan\default.xcpp"
+Write-Step "Refreshing factory default.xcpp for the package"
+if (Test-Path -LiteralPath $UserXcpp) {
+    Copy-Item -LiteralPath $UserXcpp -Destination $FactoryXcpp -Force
+    Write-Host "  using $UserXcpp → resources\default.xcpp"
+} elseif (Test-Path -LiteralPath $FactoryXcpp) {
+    Write-Host "  keeping existing resources\default.xcpp (no user default.xcpp)"
+} else {
+    Write-Warning "No default.xcpp found — package will ship without factory project defaults"
+}
+
 Write-Step "Building $AppName.exe (this may take a few minutes)"
 $pyArgs = @(
     "-m", "PyInstaller",
@@ -74,6 +89,8 @@ $pyArgs = @(
     "--icon", $AppIcon,
     "--add-data", ($AppIcon + ";xcp_pcan/resources"),
     "--add-data", ((Join-Path $Root "src\xcp_pcan\resources\cankit.png") + ";xcp_pcan/resources"),
+    # Factory default.xcpp is appended below when present.
+
     # Rely on PyInstaller PySide6 hooks (QtWidgets/Gui/Core) — avoid --collect-all bloat
     "--hidden-import", "PySide6.QtCore",
     "--hidden-import", "PySide6.QtGui",
@@ -115,6 +132,13 @@ $pyArgs = @(
     "--exclude-module", "unittest",
     $Entry
 )
+
+if (Test-Path -LiteralPath $FactoryXcpp) {
+    # Insert before entry script so PyInstaller still treats $Entry as the script.
+    $pyArgs = $pyArgs[0..($pyArgs.Count - 2)] + @(
+        "--add-data", ($FactoryXcpp + ";xcp_pcan/resources")
+    ) + @($Entry)
+}
 
 & $Python @pyArgs
 if ($LASTEXITCODE -ne 0) {

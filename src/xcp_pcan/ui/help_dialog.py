@@ -15,8 +15,7 @@ HELP_HTML = """
 <h3>1. 工具栏</h3>
 <ul>
 <li><b>Project</b>：Open / Save / Save as。</li>
-<li><b>Data Editor</b>：Load A2L/ELF、Resolve addresses from ELF、Update A2L from ELF、Create A2L from ELF。</li>
-<li><b>XCP Viewer</b>：符号列表与 Polling / DAQ 观测（弹窗）。</li>
+<li><b>XCP Viewer</b>：符号列表与 Polling / DAQ 观测；左侧 <b>A2L / ELF</b> 菜单可 Load、Resolve、Update、Create。</li>
 <li><b>Diagnostic Console</b>：UDS over ISO-TP（会话、DID、安全访问、例程、刷写模板等）。</li>
 <li>主界面为 <b>Trace</b>（离线日志 / 在线 Monitor / 发报文）；底部 Status 由 <b>CAN → Status</b> 显示/隐藏。</li>
 </ul>
@@ -37,21 +36,24 @@ HELP_HTML = """
 <li><b>Security</b>：Seed&amp;Key、Unlock resources、自动 SET_CAL_PAGE、Unlock now / SET / GET_CAL_PAGE（已连接时可再打开对话框操作）。</li>
 </ul>
 
-<h3>3. Data Editor 与符号区</h3>
+<h3>3. XCP Viewer 符号区</h3>
 <ul>
+<li>打开 <b>XCP Viewer</b> 后，左侧 Symbols 的 <b>A2L / ELF</b> 菜单：</li>
 <li><b>Load A2L/ELF</b>：加载 MEASUREMENT / CHARACTERISTIC（或 ELF 符号）。大文件后台加载，可继续改连接参数。</li>
+<li><b>Unload A2L/ELF</b>：从内存移除已加载文件（不删磁盘文件），并清空 Polling / DAQ 观测行。</li>
 <li><b>Resolve addresses from ELF</b>：仅在内存里给地址仍为 0 的符号补地址，不改 A2L 文件。</li>
 <li><b>Update A2L from ELF</b>：按 ELF 回写文件中的地址（含前导下划线等别名），另存新 A2L；后台运行可取消。</li>
 <li><b>Create A2L from ELF</b>：由 ELF 全局符号生成 A2L。可选内置 <b>Templete_FR</b> / <b>Templete_FL</b> 或自选模板；可选 DWARF 展开结构体成员。</li>
-<li>符号过滤：单关键词为子串；一次粘贴多个名字则按全名匹配。<b>Add selected</b> / <b>Add all filtered</b> 加入当前 Polling 或 DAQ 页。</li>
+<li>符号过滤：单关键词为名字子串，或模糊地址（如 <code>0xFE</code> / <code>fe04</code>）；一次粘贴多个名字则按全名匹配。在符号表右键 <b>Add selected</b> / <b>Add all filtered</b> 加入当前 Polling 或 DAQ 页，<b>Clear filter</b> 清空过滤。</li>
 </ul>
 
 <h3>4. 符号名单（Load lists）</h3>
 <p>把要观测的名字放进文件夹里的 txt：一个名字一行；文件名作为分组标签（如 <b>batt.txt</b> → <b>Batt</b>）。</p>
 <ul>
 <li>能对上的符号进入当前 Polling / DAQ 并按标签分组；仅差前导下划线也会匹配（<code>Foo</code> ↔ <code>_Foo</code>）。</li>
-<li>含中文、路径或空格的行会使整份 txt 被跳过（说明文件不会当名单）。未匹配名写在 Status 里。</li>
-<li>观测树：工具条保留 Start/Stop/Write；<b>Actions</b> 菜单含 Graphic、Export CSV、Remove、Clear、Fold all。</li>
+<li>行尾可带显示格式（如 <code>Name:dec</code> / <code>Name:hex</code>）；含中文、路径或空格的行会使整份 txt 被跳过。未匹配名写在 Status 里。</li>
+<li>Load lists 后默认折叠；<b>只有展开的分组</b>会在 Start Poll/DAQ 时采集，折叠组不占总线。改展开后需再点一次 Start。</li>
+<li>观测树：工具条保留 Start/Stop/Write。右键可 Copy / Graphic / Remove / Clear / Expand|Fold all。<b>Graphic</b> 只对选中信号缓冲曲线（默认不采图）；窗口标题为 Graphic，与 Trace 的 Trace Graphic 区分。<b>Export CSV</b> 在 Graphic 窗口内。</li>
 </ul>
 
 <h3>5. Polling / DAQ 与标定</h3>
@@ -59,7 +61,7 @@ HELP_HTML = """
 <li><b>Polling</b>：设 Interval 后 <b>Start poll</b>，周期 SHORT_UPLOAD / UPLOAD。日常读 MEASUREMENT 优先用它。</li>
 <li><b>DAQ</b>：设 Event、Prescaler 后 <b>Start DAQ</b>。同一会话不要与 Polling 同时跑。</li>
 <li><b>Write value</b>：仅标量 <b>VALUE</b> 型 CHARACTERISTIC。MEASUREMENT / CURVE / MAP / VAL_BLK 只读。DAQ 运行中禁止写；Polling 写时会短暂停轮询。</li>
-<li><b>Graphic</b>：当前页变量曲线。<b>Export CSV</b>：导出缓冲采样（time_s / timestamp / name / value / unit）。</li>
+<li><b>Graphic</b>（右键）：仅为选中信号开始采图；关闭窗口即停止缓冲。窗口内 <b>Export CSV</b> 导出已缓冲采样（time_s / timestamp / name / value / unit）。</li>
 </ul>
 
 <h3>6. Trace Viewer</h3>
@@ -82,7 +84,7 @@ RoutineControl（31）、Programming（34/36/37）、ECU Reset（11）、TesterP
 
 <h3>8. 工程与日志</h3>
 <ul>
-<li>默认工程在用户目录 <b>.xcp_pcan\\default.xcpp</b>（连接、安全、韧性、符号路径、观测列表等）。</li>
+<li>默认工程在用户目录 <b>.xcp_pcan\\default.xcpp</b>（连接、安全、韧性、符号路径、观测列表等）。首次启动若尚文件不存在，会从安装包内的出厂 <b>default.xcpp</b> 复制一份，之后只改用户自己的副本。</li>
 <li><b>CAN → Status</b> 显示/隐藏操作状态与提示；Filter：All / App / XCP / CAN / Errors。<b>Verbose</b> 打开 CAN/XCP DEBUG。</li>
 </ul>
 

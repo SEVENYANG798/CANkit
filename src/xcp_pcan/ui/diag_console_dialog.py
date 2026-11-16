@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QFrame,
     QGroupBox,
     QHBoxLayout,
-    QHeaderView,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -40,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from xcp_pcan.can.transport import CanBusTransport
 from xcp_pcan.can_id_presets import UDS_PRESETS
+from xcp_pcan.ui.column_layout import PersistedColumnWidths
 from xcp_pcan.ui.connection_panel import parse_can_id
 from xcp_pcan.ui.id_preset_bar import IdPresetBar
 from xcp_pcan.diag.isotp import (
@@ -384,9 +384,6 @@ class DiagConsoleDialog(QDialog):
         self.tbl_params.verticalHeader().setDefaultSectionSize(24)
         _configure_bold_select_table(self.tbl_params)
         self.tbl_params.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.tbl_params.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.tbl_params.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.tbl_params.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.tbl_params.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
@@ -427,12 +424,6 @@ class DiagConsoleDialog(QDialog):
         self.tbl_trace.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tbl_trace.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         _polish_diag_table(self.tbl_trace, alternating=True, editable_select=True)
-        th = self.tbl_trace.horizontalHeader()
-        th.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        th.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        th.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        th.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        th.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self._trace_sel_row = -1
         self.tbl_trace.itemSelectionChanged.connect(self._on_trace_selection)
 
@@ -455,8 +446,6 @@ class DiagConsoleDialog(QDialog):
         self.tbl_resp.setFont(QFont("Consolas", 9))
         self.tbl_resp.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         _configure_bold_select_table(self.tbl_resp)
-        self.tbl_resp.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.tbl_resp.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.tbl_resp.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
@@ -493,6 +482,28 @@ class DiagConsoleDialog(QDialog):
         root = QVBoxLayout(self)
         root.addLayout(top)
         root.addWidget(mid, stretch=1)
+
+        PersistedColumnWidths(
+            self._settings,
+            "diag_console/params_col_widths",
+            (140, 160, 48),
+            stretch_cols=(1,),
+            parent=self,
+        ).attach(self.tbl_params)
+        PersistedColumnWidths(
+            self._settings,
+            "diag_console/trace_col_widths",
+            (90, 56, 80, 160, 200),
+            stretch_cols=(3, 4),
+            parent=self,
+        ).attach(self.tbl_trace)
+        PersistedColumnWidths(
+            self._settings,
+            "diag_console/resp_col_widths",
+            (140, 200),
+            stretch_cols=(1,),
+            parent=self,
+        ).attach(self.tbl_resp)
 
         self._tp_timer = QTimer(self)
         self._tp_timer.setInterval(2000)

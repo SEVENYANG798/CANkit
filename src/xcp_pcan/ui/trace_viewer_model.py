@@ -252,8 +252,9 @@ class TraceViewerModel(QAbstractTableModel):
 
         if updated:
             cols = self.columnCount() - 1
-            for row in sorted(updated):
-                self.dataChanged.emit(self.index(row, 0), self.index(row, cols))
+            lo = min(updated)
+            hi = max(updated)
+            self.dataChanged.emit(self.index(lo, 0), self.index(hi, cols))
 
     def _rebuild_collapsed(self, frames: list[TraceFrame]) -> None:
         self._collapsed = []
@@ -290,22 +291,6 @@ class TraceViewerModel(QAbstractTableModel):
 
     def dbc_names(self) -> dict[int, str]:
         return self._dbc_names
-
-    def longest_appeared_dbc_name(self) -> str:
-        """Longest DBC name among IDs already in the buffer (not the whole DBC)."""
-        if not self._dbc_names or not self._all:
-            return ""
-        longest = ""
-        seen: set[int] = set()
-        for fr in self._all:
-            arb = fr.arbitration_id
-            if arb in seen:
-                continue
-            seen.add(arb)
-            name = self._dbc_names.get(arb) or ""
-            if name and len(name) > len(longest):
-                longest = name
-        return longest
 
     def display_name(self, fr: TraceFrame) -> str:
         if fr.is_error:

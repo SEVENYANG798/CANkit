@@ -298,7 +298,14 @@ class WatchTableModel(QAbstractItemModel):
                 return QBrush(QColor("#e8eef5"))
             return None
         var = node.var
-        if var is None or role != Qt.ItemDataRole.DisplayRole:
+        if var is None:
+            return None
+        if role == Qt.ItemDataRole.FontRole and index.column() == 3:
+            # Physical = live observed value — emphasize for scanning.
+            font = QFont()
+            font.setBold(True)
+            return font
+        if role != Qt.ItemDataRole.DisplayRole:
             return None
         return self._var_text(var, index.column())
 

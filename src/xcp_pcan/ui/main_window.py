@@ -98,6 +98,11 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
             on_line=self._append_log_line,
         )
         self._log_handler: GuiLogHandler | None = None
+        self._pending_log_lines: list[tuple[str, bool]] = []
+        self._log_flush_timer = QTimer(self)
+        self._log_flush_timer.setSingleShot(True)
+        self._log_flush_timer.setInterval(80)
+        self._log_flush_timer.timeout.connect(self._flush_log_lines)
 
         self._poller = Poller(
             self._master,
@@ -117,6 +122,9 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         # vanish after a few seconds at typical DAQ rates.
         self._poll_traces = TraceBuffer(maxlen=300_000, max_age_s=600.0)
         self._daq_traces = TraceBuffer(maxlen=300_000, max_age_s=600.0)
+        # Curve buffer only accepts these names while the matching Graphic window is open.
+        self._poll_plot_names: set[str] = set()
+        self._daq_plot_names: set[str] = set()
         self._poll_chart = None
         self._daq_chart = None
         self._project_path = None
@@ -126,6 +134,7 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._load_apply_transport = True
         self._load_on_done = None
         self._load_progress = None
+        self._symbols_view_pending = False
         self._a2l_update_worker = None
         self._a2l_update_progress = None
         self._a2l_update_cancelled = False
@@ -144,9 +153,13 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._build_ui()
         self._install_log_handler()
         self._set_connected_ui(False)
+        # Defer project restore + Connect so the first paint is not blocked by
+        # Symbol load / dialog stacking (was a blank "Symbol load" stutter).
+        QTimer.singleShot(0, self._deferred_startup)
+
+    def _deferred_startup(self) -> None:
         self._restore_last_project()
-        # After first paint + project restore, open Connect like CAN → Connect...
-        QTimer.singleShot(0, self._open_connect_dialog)
+        QTimer.singleShot(50, self._open_connect_dialog)
 
     # --- UI construction -------------------------------------------------------
 
@@ -200,6 +213,12 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
 
         self._act_load_symbols = QAction("Load A2L/ELF", self)
         self._act_load_symbols.triggered.connect(self._load_symbols)
+        self._act_clear_symbols = QAction("Unload A2L/ELF", self)
+        self._act_clear_symbols.setToolTip(
+            "Remove the loaded symbol file from memory (does not delete the file on disk). "
+            "Also clears Polling / DAQ watch rows that came from it."
+        )
+        self._act_clear_symbols.triggered.connect(self._clear_loaded_symbols)
         self._act_resolve_elf = QAction("Resolve addresses from ELF", self)
         self._act_resolve_elf.setToolTip(
             "Fill A2L symbols that still have address 0 using an ELF symbol table "
@@ -218,22 +237,10 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         )
         self._act_elf2a2l.triggered.connect(self._elf_to_a2l)
 
-        data_menu = QMenu(self)
-        data_menu.addAction(self._act_load_symbols)
-        data_menu.addAction(self._act_resolve_elf)
-        data_menu.addAction(self._act_update_a2l)
-        data_menu.addAction(self._act_elf2a2l)
-        btn_data = QToolButton()
-        btn_data.setText("Data Editor")
-        btn_data.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        btn_data.setMenu(data_menu)
-        btn_data.setToolTip("A2L / ELF load, resolve, update, and create")
-        toolbar.addWidget(btn_data)
-        toolbar.addSeparator()
-
         self._act_xcp_viewer = QAction("XCP Viewer", self)
         self._act_xcp_viewer.setToolTip(
-            "Symbols list and Polling / DAQ watch (measurement & calibration)."
+            "Symbols list and Polling / DAQ watch (measurement & calibration). "
+            "Load A2L/ELF from the Symbols panel inside this window."
         )
         self._act_xcp_viewer.triggered.connect(self._open_xcp_viewer)
         toolbar.addAction(self._act_xcp_viewer)
@@ -292,9 +299,18 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
             self._can_menu.addAction(act)
 
         self._mid = QSplitter(Qt.Orientation.Horizontal)
-        self.symbols = SymbolPanel(self._symbol_model)
+        self.symbols = SymbolPanel(self._symbol_model, settings=self._settings)
         self.symbols.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self.symbols.set_file_actions(
+            [
+                self._act_load_symbols,
+                self._act_clear_symbols,
+                self._act_resolve_elf,
+                self._act_update_a2l,
+                self._act_elf2a2l,
+            ]
         )
         self.symbols.add_selected.connect(self._add_selected_to_watch)
         self.symbols.add_all_filtered.connect(self._add_all_filtered_to_watch)
@@ -302,7 +318,9 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self.symbols.filter_changed.connect(lambda _t: self._filter_symbols())
         self.symbols.clear_filter.connect(self._filter_symbols)
 
-        self.watch = WatchTabs(self._poll_watch_model, self._daq_watch_model)
+        self.watch = WatchTabs(
+            self._poll_watch_model, self._daq_watch_model, settings=self._settings
+        )
         self.watch.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -313,7 +331,6 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
             lambda: self._write_selected(self._poll_watch_model, self.watch.tbl_poll)
         )
         self.watch.poll_curves.connect(self._open_poll_chart)
-        self.watch.poll_export.connect(lambda: self._export_csv(self._poll_traces, "polling"))
         self.watch.poll_remove.connect(
             lambda: self._remove_watch(self._poll_watch_model, self.watch.tbl_poll)
         )
@@ -324,7 +341,6 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
             lambda: self._write_selected(self._daq_watch_model, self.watch.tbl_daq)
         )
         self.watch.daq_curves.connect(self._open_daq_chart)
-        self.watch.daq_export.connect(lambda: self._export_csv(self._daq_traces, "daq"))
         self.watch.daq_remove.connect(
             lambda: self._remove_watch(self._daq_watch_model, self.watch.tbl_daq)
         )
@@ -454,12 +470,15 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         return body
 
     def _install_log_handler(self) -> None:
-        handler = GuiLogHandler(lambda e: self._bridge.log_entry.emit(e), level=logging.DEBUG)
+        # INFO by default — DEBUG on the package floods Status during Monitor.
+        handler = GuiLogHandler(lambda e: self._bridge.log_entry.emit(e), level=logging.INFO)
         handler.setFormatter(logging.Formatter("%(message)s"))
         pkg = logging.getLogger("xcp_pcan")
         pkg.addHandler(handler)
-        pkg.setLevel(logging.DEBUG)
-        apply_verbose_levels(verbose=self.chk_log_verbose.isChecked())
+        pkg.setLevel(logging.INFO)
+        verbose = self.chk_log_verbose.isChecked()
+        handler.setLevel(logging.DEBUG if verbose else logging.INFO)
+        apply_verbose_levels(verbose=verbose)
         self._log_handler = handler
 
     # --- Status panel / shutdown ------------------------------------------------
@@ -479,12 +498,38 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         self._log_buffer.append(line, category=category, level=level, logger_name=__name__)
 
     def _append_log_line(self, line: str) -> None:
-        self._write_log_line(line, error="[ERROR]" in line)
+        # Coalesce into a timer flush — per-line QTextEdit edits freeze the UI
+        # when CAN/XCP DEBUG or Monitor echo floods Status.
+        self._pending_log_lines.append((line, "[ERROR]" in line or line.startswith("ERROR")))
+        if len(self._pending_log_lines) > 500:
+            self._pending_log_lines = self._pending_log_lines[-300:]
+        if not self._log_flush_timer.isActive():
+            self._log_flush_timer.start()
 
-    def _write_log_line(self, line: str, *, error: bool) -> None:
-        cursor = self.txt_log.textCursor()
+    def _flush_log_lines(self) -> None:
+        lines = self._pending_log_lines
+        self._pending_log_lines = []
+        if not lines or not hasattr(self, "txt_log"):
+            return
+        visible = self._log_panel.isVisible()
+        self.txt_log.setUpdatesEnabled(False)
+        try:
+            for line, error in lines:
+                self._write_log_line(line, error=error, scroll=False)
+            if visible:
+                cursor = self.txt_log.textCursor()
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+                self.txt_log.setTextCursor(cursor)
+                self.txt_log.ensureCursorVisible()
+        finally:
+            self.txt_log.setUpdatesEnabled(True)
+
+    def _write_log_line(self, line: str, *, error: bool, scroll: bool = True) -> None:
+        doc = self.txt_log.document()
+        cursor = QTextCursor(doc)
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        if self.txt_log.toPlainText():
+        # characterCount includes the trailing paragraph separator.
+        if doc.characterCount() > 1:
             cursor.insertText("\n")
         fmt = QTextCharFormat()
         if error:
@@ -492,16 +537,23 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
         else:
             fmt.setForeground(self.txt_log.palette().color(QPalette.ColorRole.Text))
         cursor.insertText(line, fmt)
-        self.txt_log.setTextCursor(cursor)
-        self.txt_log.ensureCursorVisible()
+        if scroll:
+            self.txt_log.setTextCursor(cursor)
+            self.txt_log.ensureCursorVisible()
 
     def _rebuild_log_view(self) -> None:
         if not hasattr(self, "txt_log"):
             return
-        self.txt_log.clear()
-        for entry in self._log_buffer.filtered_entries():
-            error = entry.category == LogCategory.ERROR or entry.level >= logging.ERROR
-            self._write_log_line(entry.format_line(), error=error)
+        self._pending_log_lines.clear()
+        self._log_flush_timer.stop()
+        self.txt_log.setUpdatesEnabled(False)
+        try:
+            self.txt_log.clear()
+            for entry in self._log_buffer.filtered_entries():
+                error = entry.category == LogCategory.ERROR or entry.level >= logging.ERROR
+                self._write_log_line(entry.format_line(), error=error, scroll=False)
+        finally:
+            self.txt_log.setUpdatesEnabled(True)
         bar = self.txt_log.verticalScrollBar()
         bar.setValue(bar.maximum())
 
@@ -521,6 +573,8 @@ class MainWindow(ConnectMixin, SymbolToolsMixin, ProjectMixin, MeasureMixin, QMa
     @Slot(bool)
     def _on_log_verbose_toggled(self, checked: bool) -> None:
         apply_verbose_levels(verbose=checked)
+        if self._log_handler is not None:
+            self._log_handler.setLevel(logging.DEBUG if checked else logging.INFO)
         mode = self.cmb_log_filter.currentData()
         if isinstance(mode, LogFilterMode):
             ensure_filter_capture(mode)

@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QPoint, QSettings, Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QTableView,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from xcp_pcan.symbols.types import Variable
+from xcp_pcan.ui.column_layout import PersistedColumnWidths
 from xcp_pcan.ui.models import SymbolTableModel
+from xcp_pcan.ui.window_util import bind_copy_shortcut, copy_selected_rows
 
 
 class SymbolPanel(QGroupBox):
@@ -29,6 +34,7 @@ class SymbolPanel(QGroupBox):
     def __init__(
         self,
         model: SymbolTableModel,
+        settings: QSettings | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__("Symbols", parent)
@@ -39,9 +45,19 @@ class SymbolPanel(QGroupBox):
         layout.setSpacing(4)
 
         filter_row = QHBoxLayout()
+        self.btn_files = QToolButton()
+        self.btn_files.setText("A2L / ELF")
+        self.btn_files.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.btn_files.setToolTip("Load / unload / resolve / update / create A2L and ELF for XCP")
+        self.btn_files.setEnabled(False)
+        filter_row.addWidget(self.btn_files)
         filter_row.addWidget(QLabel("Filter"))
         self.edt_search = QLineEdit()
-        self.edt_search.setPlaceholderText("Symbol1, Symbol2, Symbol3")
+        self.edt_search.setPlaceholderText("Name, 0xFE, fe04…")
+        self.edt_search.setToolTip(
+            "Filter by name substring, or fuzzy address (e.g. 0xFE / fe04). "
+            "Paste several names for exact match."
+        )
         self.edt_search.setClearButtonEnabled(True)
         self.edt_search.textChanged.connect(self.filter_changed.emit)
         filter_row.addWidget(self.edt_search, stretch=1)
@@ -64,20 +80,25 @@ class SymbolPanel(QGroupBox):
         self.tbl_symbols.setSelectionMode(QTableView.SelectionMode.ExtendedSelection)
         self.tbl_symbols.verticalHeader().setDefaultSectionSize(22)
         self.tbl_symbols.verticalHeader().setVisible(False)
-        self.tbl_symbols.horizontalHeader().setStretchLastSection(True)
+        self.tbl_symbols.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tbl_symbols.customContextMenuRequested.connect(self._show_symbol_context_menu)
+        bind_copy_shortcut(self.tbl_symbols)
+        PersistedColumnWidths(
+            settings,
+            "xcp_symbols/column_widths",
+            (240, 100, 48, 100, 64, 48, 48, 72),
+            stretch_cols=(7,),  # Source
+            parent=self,
+        ).attach(self.tbl_symbols)
         layout.addWidget(self.tbl_symbols, stretch=1)
 
-        btn_row = QHBoxLayout()
-        btn_add = QPushButton("Add selected")
-        btn_add.clicked.connect(self.add_selected.emit)
-        btn_add_all = QPushButton("Add all filtered")
-        btn_add_all.clicked.connect(self.add_all_filtered.emit)
-        btn_clear = QPushButton("Clear filter")
-        btn_clear.clicked.connect(self._on_clear_filter)
-        btn_row.addWidget(btn_add)
-        btn_row.addWidget(btn_add_all)
-        btn_row.addWidget(btn_clear)
-        layout.addLayout(btn_row)
+    def set_file_actions(self, actions: list[QAction]) -> None:
+        """Attach Load A2L/ELF / Resolve / Update / Create under A2L / ELF."""
+        menu = QMenu(self)
+        for act in actions:
+            menu.addAction(act)
+        self.btn_files.setMenu(menu)
+        self.btn_files.setEnabled(bool(actions))
 
     def filter_text(self) -> str:
         return self.edt_search.text()
@@ -108,3 +129,34 @@ class SymbolPanel(QGroupBox):
     def _on_clear_filter(self) -> None:
         self.edt_search.clear()
         self.clear_filter.emit()
+
+    def _show_symbol_context_menu(self, pos: QPoint) -> None:
+        """Right-click: select row under cursor, then Add / Clear filter."""
+        view = self.tbl_symbols
+        index = view.indexAt(pos)
+        if index.isValid():
+            sm = view.selectionModel()
+            if sm is not None and not sm.isSelected(index):
+                sm.select(
+                    index,
+                    sm.SelectionFlag.ClearAndSelect | sm.SelectionFlag.Rows,
+                )
+        has_sel = bool(self.selected_rows())
+        menu = QMenu(view)
+        act_copy = menu.addAction("Copy")
+        act_copy.setEnabled(has_sel)
+        menu.addSeparator()
+        act_add = menu.addAction("Add selected")
+        act_add.setEnabled(has_sel)
+        act_add_all = menu.addAction("Add all filtered")
+        act_add_all.setEnabled(self._model.rowCount() > 0)
+        act_clear = menu.addAction("Clear filter")
+        chosen = menu.exec(view.viewport().mapToGlobal(pos))
+        if chosen is act_copy:
+            copy_selected_rows(view)
+        elif chosen is act_add:
+            self.add_selected.emit()
+        elif chosen is act_add_all:
+            self.add_all_filtered.emit()
+        elif chosen is act_clear:
+            self._on_clear_filter()

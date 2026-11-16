@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "connection": {
+    "hardware": "pcan",
+    "channel": "PCAN_USBBUS1",
+    "vector_app_name": "CANkit",
+    "vector_serial": null,
+    "bitrate": 500000,
+    "fd": true,
+    "data_bitrate": 2000000,
+    "f_clock_mhz": 80,
+    "master_can_id": "0x6AA",
+    "slave_can_id": "0x6AB",
+    "timeout_ms": 997
+  },
+  "security": {
+    "seedkey_path": "",
+    "dll_symbol": "XCP_ComputeKeyFromSeed",
+    "auto_unlock": false,
+    "unlock_cal": true,
+    "unlock_daq": true,
+    "unlock_stim": false,
+    "unlock_pgm": false,
+    "auto_set_cal_page": false,
+    "cal_mode_ecu": true,
+    "cal_mode_xcp": true,
+    "cal_segment": 0,
+    "cal_page": 0
+  },
+  "resilience": {
+    "cto_retries": 2,
+    "cto_retry_delay_ms": 50,
+    "reconnect_enabled": true,
+    "reconnect_max_attempts": 5,
+    "reconnect_backoff_ms": 400,
+    "daq_dto_timeout_ms": 2000
+  },
+  "symbol_path": "E:\\E_FLASH\\E80_VIUR-E94200730S100001C100005_8\\VIUELF_E94200730S100001C100005N82KS\\E80_VIUR.a2l",
+  "polling": {
+    "interval_ms": 100,
+    "watch": []
+  },
+  "daq": {
+    "event_channel": 0,
+    "prescaler": 1,
+    "timestamp": false,
+    "watch": [
+      "BCMO_DIR_Li_Brk_Le_Ctrl_Li",
+      "BCMO_DIR_Li_Brk_Le_DutyRat_Li",
+      "BCMO_DIR_Li_Brk_Ri_Ctrl_Li",
+      "BCMO_DIR_Li_Brk_Ri_DutyRat_Li",
+      "BCMO_DIR_Li_Brk_Hi_Ctrl_Li",
+      "BCMO_DIR_Li_Brk_Hi_DutyRat_Li",
+      "BCMO_DIR_Li_Rvs_R_Ctrl_Li",
+      "BCMO_DIR_Li_Rvs_R_DutyRat_Li",
+      "HwaI_Core1_gucLfRrBrakeLightCmd",
+      "HwaI_Core1_gucRtRrBrakeLightCmd",
+      "HwaI_Core1_gucHighBrakeLightCmd",
+      "HwaO_Core1_gusLfRrBrakeLightCurr",
+      "HwaO_Core1_gusRtRrBrakeLightCurr",
+      "HwaO_Core1_gusHighBrakeLightCurr",
+      "HwaI_Core1_gucLfFrtDoorLockCmd",
+      "HwaI_Core1_gusLfFrtDoorLockDuty",
+      "HwaI_Core1_gucLfRrDoorLockCmd",
+      "HwaI_Core1_gusLfRrDoorLockDuty",
+      "IL_SwVerss"
+    ]
+  }
+}
